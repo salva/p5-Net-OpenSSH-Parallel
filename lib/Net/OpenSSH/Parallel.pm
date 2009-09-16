@@ -1,47 +1,67 @@
 package Net::OpenSSH::Parallel;
 
-use 5.010000;
+our $VERSION = '0.01';
+
 use strict;
 use warnings;
 
-require Exporter;
+sub new {
+    my $class = shift;
+    my $self = { queues => {},
+		 joins => {},
+		 queue_by_pid => {} };
+    bless $self, $class;
+    $self;
+}
 
-our @ISA = qw(Exporter);
+sub add_queue {
+    my $self = shift;
+    my $queue = Net::OpenSSH::Paralle::Queue->new(@_);
+    $self->{queues}{$queue->label} = $queue;
+}
 
-# Items to export into callers namespace by default. Note: do not export
-# names by default without a very good reason. Use EXPORT_OK instead.
-# Do not simply export all your public functions/methods/constants.
+package Net::OpenSSH::Parallel::Queue;
+use Carp;
 
-# This allows declaration	use Net::OpenSSH::Parallel ':all';
-# If you do not need this, moving things directly into @EXPORT or @EXPORT_OK
-# will save memory.
-our %EXPORT_TAGS = ( 'all' => [ qw(
-	
-) ] );
+sub new {
+    my $class = shift;
+    my $label = shift;
+    $label =~ /([,*!()<>\/{}])/ and croak "invalid char '$1' in queue label";
+    my %opts = (@_ & 1 ? host => @_ : @_);
+    $opts{host} = $label unless defined $opts{host};
 
-our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
+    my $self = { label => $label,
+		 workers => 1,
+		 status => 'new',
+		 opts => \%opts,
+		 ssh => undef,
+		 queue => []};
+    bless $self, $class;
+}
 
-our @EXPORT = qw(
-	
-);
-
-our $VERSION = '0.01';
-
-
-# Preloaded methods go here.
+sub label { shift->{label} }
 
 1;
 __END__
-# Below is stub documentation for your module. You'd better edit it!
 
 =head1 NAME
 
-Net::OpenSSH::Parallel - Perl extension for blah blah blah
+Net::OpenSSH::Parallel - Run SSH jobs in parallel
 
 =head1 SYNOPSIS
 
   use Net::OpenSSH::Parallel;
-  blah blah blah
+
+  my $pssh = Net::OpenSSH::Parallel->new(max_connections => 50, max_workers => 30);
+  for my $h (@hosts)
+    $pssh->add_queue($h);
+  }
+
+  $pssh->push('*', scp_put => '/local/file/path', '/remote/file/path');
+  $pssh->push('*', system => 'gurummm',
+              '/remote/file/path', '/tmp/output.%HOST%');
+  $pssh->push('*', scp_get => '/tmp/output.%HOST%', 'logs/')
+
 
 =head1 DESCRIPTION
 
