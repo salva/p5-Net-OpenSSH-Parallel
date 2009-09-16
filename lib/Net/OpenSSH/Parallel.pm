@@ -59,7 +59,7 @@ Net::OpenSSH::Parallel - Run SSH jobs in parallel
 
   $pssh->push('*', scp_put => '/local/file/path', '/remote/file/path');
   $pssh->push('*', system => 'gurummm',
-              '/remote/file/path', '/tmp/output.%HOST%');
+              '/remote/file/path', '/tmp/output');
   $pssh->push('*', scp_get => '/tmp/output.%HOST%', 'logs/')
 
 
