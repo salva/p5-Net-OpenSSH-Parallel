@@ -1,0 +1,6 @@
+Revision history for Perl extension Net::OpenSSH::Parallel.
+
+0.01  Wed Sep 16 08:50:43 2009
+	- original version; created by h2xs 1.23 with options
+		-AXn Net::OpenSSH::Parallel
+
