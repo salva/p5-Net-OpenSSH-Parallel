@@ -305,15 +305,14 @@ Net::OpenSSH::Parallel - Run SSH jobs in parallel
 
   use Net::OpenSSH::Parallel;
 
-  my $pssh = Net::OpenSSH::Parallel->new(max_connections => 50, max_workers => 30);
-  for my $h (@hosts)
-    $pssh->add_queue($h);
-  }
+  my $pssh = Net::OpenSSH::Parallel->new();
+  $pssh->add_host($_) for @hosts;
 
   $pssh->push('*', scp_put => '/local/file/path', '/remote/file/path');
   $pssh->push('*', system => 'gurummm',
               '/remote/file/path', '/tmp/output');
-  $pssh->push('*', scp_get => '/tmp/output', 'logs/%HOST%/output')
+  $pssh->push($special_host, system => 'prumprum', '/tmp/output');
+  $pssh->push('*', scp_get => '/tmp/output', 'logs/%HOST%/output');
 
   $pssh->run;
 
@@ -323,6 +322,41 @@ Run this here, that there, etc.
 
 =head2 API
 
+These are the methods supported by these class:
+
+=over
+
+=item $pssh = Net::OpenSSH::Parallel->new(%opts)
+
+creates a new object.
+
+The accepted options are:
+
+=over
+
+=item debug => $channels
+
+select the level of debugging you want (0 => nothing, -1 => maximum).
+
+=back
+
+=item $psh->push($selector, $action, \%opts, @action_args)
+
+=item $psh->push($selector, $action, @action_args)
+
+pushes a new action into the queues selected by C<$selector>.
+
+The C<%opts> hash is optional
+
+The supported actions are:
+
+=over
+
+=item system => 
+
+=back
+
+=back
 
 =head1 SEE ALSO
 
