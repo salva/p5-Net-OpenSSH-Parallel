@@ -25,15 +25,17 @@ sub new {
 			      ready => {},
 			      running => {},
 			      done => {},
+			      waiting => {},
 			      error => {},
 			     },
+		 joins => {},
 		 debug => $debug || 0,
 	       };
     bless $self, $class;
     $self;
 }
 
-my %debug_channel = (api => 1, state => 2, select => 4, at => 8, action => 16);
+my %debug_channel = (api => 1, state => 2, select => 4, at => 8, action => 16, join => 32);
 
 sub _debug {
     my $self = shift;
@@ -44,7 +46,6 @@ sub _debug {
 	print STDERR sprintf("%6.3f", (time - $^T)), "| ", join('', @_), "\n";
     }
 }
-
 
 sub add_host {
     my $self = shift;
@@ -98,23 +99,50 @@ sub push {
     my $in_state = $self->{in_state};
     my %opts = (ref $_[0] eq 'HASH' ? %{shift()} : ());
 
-    $action =~ /^(?:system|scp_get|scp_put)$/
-	or croak "bad_action";
+    if (ref $action eq 'CODE') {
+	$action = 'sub';
+	unshift @_, $action;
+    }
+
+    $action =~ /^(?:system|scp_get|scp_put|join|_notify)$/
+	or croak "bad action";
 
     my @labels = $self->_select_labels($selector);
-    for my $label (@labels) {
-	my $host = $self->{hosts}{$label};
-	push @{$host->{queue}}, [$action, \%opts, @_];
-	$self->_debug(api => "[$label] action $action queued");
-	if ($in_state->{done}{$label}) {
-	    if ($host->{ssh}) {
-		$self->_set_host_state($label, 'ready')
-	    }
-	    else {
-		$self->_set_host_state($label, 'init');
+
+    if ($action eq 'join') {
+	my $notify_selector = shift @_;
+	my $join = { id => '#' . $self->{join_seq}++,
+		     depends => {},
+		     notify => [] };
+	my @depends = $self->push($notify_selector, _notify => {}, $join)
+	    or do {
+		$join->_debug(join => "join $join->{id} does not depend on anything, ignoring!");
+		return ();
+	    };
+	$join->{depends}{$_} = 1 for @depends;
+
+	for my $label (@labels) {
+	    my $host = $self->{hosts}{$label};
+	    push @{$host->{queue}}, [$action, {}, $join];
+	    $self->_debug(api => "[$label] join $join->{id} queued");
+	}
+    }
+    else {
+	for my $label (@labels) {
+	    my $host = $self->{hosts}{$label};
+	    push @{$host->{queue}}, [$action, \%opts, @_];
+	    $self->_debug(api => "[$label] action $action queued");
+	    if ($in_state->{done}{$label}) {
+		if ($host->{ssh}) {
+		    $self->_set_host_state($label, 'ready')
+		}
+		else {
+		    $self->_set_host_state($label, 'init');
+		}
 	    }
 	}
     }
+    return @labels;
 }
 
 sub _at_init {
@@ -145,26 +173,65 @@ sub _at_connecting {
     }
 }
 
+sub _join_notify {
+    my ($self, $label, $join) = @_;
+    use Data::Dumper;
+    print STDERR Dumper $join;
+    delete $join->{depends}{$label}
+	or die "internal error: $join->{id} notified for non dependent label $label";
+    $self->_debug(join => "removing dependent $label from join $join->{id}");
+    if (not %{$join->{depends}}) {
+	$self->_debug(join => "join $join->{id} done");
+	$join->{done} = 1;
+	for my $label (@{$join->{notify}}) {
+	    $self->_debug(join => "notifying $label about join $join->{id} done");
+	    $self->_set_host_state($label, 'ready');
+	}
+    }
+    print STDERR Dumper $join;
+}
+
 sub _at_ready {
     my ($self, $label) = @_;
     my $host = $self->{hosts}{$label};
-    $self->_debug(at => "[$label] at_init");
+    $self->_debug(at => "[$label] at_ready");
     my $queue = $host->{queue};
-    my $task = shift @$queue;
-    if (defined $task) {
+    while (my $task = shift @$queue) {
 	my $action = shift @$task;
-	$self->_debug(at => "[$label] at_init, starting new action $action");
-	my $method = "_start_$action";
-	my $pid = $self->$method($label, @$task);
-	$pid or die "action $action failed to start: ". $host->{ssh}->error;
-	$self->_debug(action => "[$label] action pid: $pid");
-	$self->{host_by_pid}{$pid} = $label;
-	$self->_set_host_state($label, 'running');
+	$self->_debug(at => "[$label] at_ready, starting new action $action");
+	if ($action eq 'join') {
+	    my ($opts, $join) = @$task;
+	    if ($join->{done}) {
+		$self->_debug(action => "[$label] join $join->{id} already done");
+		next;
+	    }
+	    CORE::push @{$join->{notify}}, $label;
+	    $self->_set_host_state($label, 'waiting');
+	}
+	elsif ($action eq '_notify') {
+	    my ($opts, $join) = @$task;
+	    $self->_join_notify($label, $join);
+	    next;
+	}
+	elsif ($action eq 'sub') {
+	    my $opts = shift @$task;
+	    my $sub = shift @$task;
+	    $self->_debug(action => "[$label] calling sub $sub");
+	    $sub->($self, $label, @$task);
+	    next;
+	}
+	else {
+	    my $method = "_start_$action";
+	    my $pid = $self->$method($label, @$task);
+	    $pid or die "action $action failed to start: ". $host->{ssh}->error;
+	    $self->_debug(action => "[$label] action pid: $pid");
+	    $self->{host_by_pid}{$pid} = $label;
+	    $self->_set_host_state($label, 'running');
+	}
+	return;
     }
-    else {
-	$self->_debug(at => "[$label] at_init, queue_is_empty, we are done!");
-	$self->_set_host_state($label, 'done');
-    }
+    $self->_debug(at => "[$label] at_init, queue_is_empty, we are done!");
+    $self->_set_host_state($label, 'done');
 }
 
 sub _start_system {
@@ -199,6 +266,11 @@ sub _start_scp_put {
     $ssh->scp_put($opts, @_);
 }
 
+sub _start_join {
+    my $self = shift;
+    my $label = shift;
+}
+
 sub _finish_action {
     my ($self, $pid, $rc) = @_;
     my $label = delete $self->{host_by_pid}{$pid};
@@ -220,14 +292,16 @@ sub _wait_for_jobs {
     # after the select. If we find some child has exited in the first
     # round we don't call select at all and return immediately
     while (1) {
-	$self->_debug(at => "_wait_for_jobs reaping children");
-	while (1) {
-	    my $pid = waitpid(-1, WNOHANG);
-	    my $rc = $?;
-	    last if $pid <= 0;
-	    $self->_debug(action => "waitpid caught pid: $pid, rc: $rc");
-	    $dontwait = 1;
-	    $self->_finish_action($pid, $rc);
+	if (%{$self->{in_state}{running}}) {
+	    $self->_debug(at => "_wait_for_jobs reaping children");
+	    while (1) {
+		my $pid = waitpid(-1, WNOHANG);
+		my $rc = $?;
+		last if $pid <= 0;
+		$self->_debug(action => "waitpid caught pid: $pid, rc: $rc");
+		$dontwait = 1;
+		$self->_finish_action($pid, $rc);
+	    }
 	}
 	$dontwait and return 1;
 	$self->_debug(at => "_wait_for_jobs calling select");
@@ -245,8 +319,8 @@ sub run {
     my ($self, $time) = @_;
     my $hosts = $self->{hosts};
     my $in_state = $self->{in_state};
-    my ($init, $connecting, $ready, $running, $done)
-	= @{$in_state}{qw(init connecting ready running done)};
+    my ($init, $connecting, $ready, $running, $waiting, $done)
+	= @{$in_state}{qw(init connecting ready running waiting done)};
     while (1) {
 	# use Data::Dumper;
 	# print STDERR Dumper $self;
@@ -262,18 +336,19 @@ sub run {
 	$self->_at_connecting($_) for keys %$connecting;
 	$self->_debug(at => "run: hosts at connecting: ", scalar(keys %$connecting));
 
+	$self->_debug(at => "run: hosts at waiting: ", scalar(keys %$waiting));
+
 	$self->_debug(at => "run: hosts at ready: ", scalar(keys %$ready));
 	$self->_at_ready($_) for keys %$ready;
 
-	my $time = ( keys(%$init) ? 0 :
-		     keys(%$connecting) ? 0.1 :
-		     3.0);
+	my $time = ( (%$init || %$ready) ? 0   :
+		     %$connecting        ? 0.1 :
+		                           3.0);
 
 	$self->_debug(at => "run: hosts at running: ", scalar(keys %$running));
-	$self->_wait_for_jobs($time) if keys %$running;
+	$self->_wait_for_jobs($time);
     }
 }
-
 
 package Net::OpenSSH::Parallel::Host;
 use Carp;
