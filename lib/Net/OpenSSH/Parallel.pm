@@ -514,9 +514,55 @@ Net::OpenSSH::Parallel - Run SSH jobs in parallel
 
 Run this here, that there, etc.
 
+L<Net::OpenSSH::Parallel> is a parallel scheduller that can run
+commands in a set of hosts in parallel through SSH.
+
+The more common usage of the module follows this structure:
+
+=over
+
+=item *
+
+create the L<Net::OpenSSH::Parallel> object
+
+=item *
+
+register the hosts where you want to run commands with the L</add_host> method
+
+=item *
+
+queue the actions you want to run (remote commands, remote file copy
+operations, etc.) using the L</push> method.
+
+=item *
+
+let the parallel scheduller take care of everything calling the
+L</run> method.
+
+=back
+
+=head2 Selecting hosts
+
+Several of the methods of this module accept a selector string to
+determine which of the registered hosts should be affected by the
+operation.
+
+For instance, in:
+
+  $pssh->push('*', system => 'ls')
+
+the first argument is the selector. In this case C<*> means all the
+registered hosts.
+
+Other possible selectors are:
+
+  'bar*'                # selects everything beginning by 'bar'
+  'foo1,foo3,foo6'      # selects the hosts of the given names
+  'bar*,foo1,foo3,foo6' # both
+
 =head2 API
 
-These are the methods supported by these class:
+These are the methods supported by this class:
 
 =over
 
@@ -544,9 +590,23 @@ select the level of debugging you want (0 => nothing, -1 => maximum).
 
 =back
 
-=item $psh->push($selector, $action, \%opts, @action_args)
+=item $pssh->add_host($host)
 
-=item $psh->push($selector, $action, @action_args)
+=item $pssh->add_host($label, $host, %opts)
+
+registers a new host into the parallel L<Net::OpenSSH::Parallel> object.
+
+C<$label> is the name used to refer to the registered host afterwards.
+
+When only an argument is passed it is used both as the label and as the hostname.
+
+=item $pssh->run
+
+runs the queued operations
+
+=item $pssh->push($selector, $action, \%opts, @action_args)
+
+=item $pssh->push($selector, $action, @action_args)
 
 pushes a new action into the queues selected by C<$selector>.
 
