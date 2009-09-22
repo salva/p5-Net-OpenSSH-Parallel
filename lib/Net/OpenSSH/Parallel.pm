@@ -14,13 +14,13 @@ sub new {
     my ($class, %opts) = @_;
 
     my $debug = delete $opts{debug};
-    my $max_workers = delete $opts{maximum_workers};
-    my $max_conns = delete $opts{maximum_connections};
+    my $max_workers = delete $opts{workers};
+    my $max_conns = delete $opts{connections};
 
     if ($max_conns) {
 	if ($max_workers) {
 	    $max_conns < $max_workers and
-		croak "maximum_connections ($max_conns) < maximum_workers ($max_workers)";
+		croak "connections ($max_conns) < workers ($max_workers)";
 	}
 	else {
 	    $max_workers = $max_conns;
@@ -528,7 +528,17 @@ The accepted options are:
 
 =over
 
-=item debug => $channels
+=item workers => $max_workers
+
+sets the maximum number of operations carried out in parallel.
+
+=item connections => $max_conns
+
+sets the maximum number of SSH connections that can be stablished simultaneously.
+
+$max_conns must be equeal or bigger than $max_workers
+
+=item debug => $debug
 
 select the level of debugging you want (0 => nothing, -1 => maximum).
 
@@ -540,15 +550,50 @@ select the level of debugging you want (0 => nothing, -1 => maximum).
 
 pushes a new action into the queues selected by C<$selector>.
 
-The C<%opts> hash is optional
-
 The supported actions are:
 
 =over
 
-=item system => 
+=item system => @cmd
+
+queue the given shell command on the selected hosts.
+
+Example:
+
+  $self->push('*', 'system'
+              { stdout_fh => $log, stderr_to_stdout => 1 },
+              'find', '/');
+
+=item scp_get => @remote, $local
+
+=item scp_put => @local, $remote
+
+These methods queue an SCP remote file copy operation in the selected
+hosts.
+
+=item sub { ... }
+
+Queues a call to a perl subroutine that will be executed locally.
 
 =back
+
+When given, the C<\%opts> argument can contain the following options:
+
+=over 4
+
+=item on_error => sub { }
+
+=item on_error => $fail_mode
+
+=item timeout => $seconds
+
+=item on_done => sub { }
+
+=back
+
+Any other option will be passed to the corresponding L<Net::OpenSSH>
+method (L<spawn|Net::OpenSSH/spawn>, L<scp_put|Net::OpenSSH/scp_put>,
+etc.).
 
 =back
 
