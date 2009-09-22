@@ -15,13 +15,24 @@ sub new {
 
     my $debug = delete $opts{debug};
     my $max_workers = delete $opts{maximum_workers};
+    my $max_conns = delete $opts{maximum_connections};
+
+    if ($max_conns) {
+	if ($max_workers) {
+	    $max_conns < $max_workers and
+		croak "maximum_connections ($max_conns) < maximum_workers ($max_workers)";
+	}
+	else {
+	    $max_workers = $max_conns;
+	}
+    }
+
     %opts and croak "unknonwn option(s): ". join(", ", keys %opts);
 
     my $self = { joins => {},
 		 hosts => {},
 		 host_by_pid => {},
 		 in_state => {
-			      init => {},
 			      connecting => {},
 			      ready => {},
 			      running => {},
@@ -30,15 +41,20 @@ sub new {
 			      error => {},
 			      suspended => {},
 			     },
+		 connected => { suspended => {},
+				waiting => {},
+			      },
 		 joins => {},
 		 debug => $debug || 0,
 		 max_workers => $max_workers,
+		 max_conns => $max_conns,
+		 num_conns => 0,
 	       };
     bless $self, $class;
     $self;
 }
 
-my %debug_channel = (api => 1, state => 2, select => 4, at => 8, action => 16, join => 32, workers => 64);
+my %debug_channel = (api => 1, state => 2, select => 4, at => 8, action => 16, join => 32, workers => 64, connect => 128, conns => 256);
 
 sub _debug {
     my $self = shift;
@@ -66,9 +82,17 @@ sub _set_host_state {
     my $old = $host->{state};
     delete $self->{in_state}{$old}{$label}
 	or die "internal error: host $label is in state $old but not in such queue";
+    delete $self->{connected}{$old}{$label}
+	if ($old eq 'suspended' or $old eq 'waiting');
+
     $self->{in_state}{$state}{$label} = 1;
     $host->{state} = $state;
     $self->_debug(state => "[$label] state changed $old --> $state");
+
+    if ($host->{ssh} and ($state eq 'suspended' or $state eq 'waiting')) {
+	$self->{connected}{$state}{$label} = 1;
+	$self->_debug(state => "[$label] host is connected");
+    }
 }
 
 my %sel2re_cache;
@@ -135,31 +159,42 @@ sub push {
 	    my $host = $self->{hosts}{$label};
 	    push @{$host->{queue}}, [$action, \%opts, @_];
 	    $self->_debug(api => "[$label] action $action queued");
-	    if ($in_state->{done}{$label}) {
-		if ($host->{ssh}) {
-		    $self->_set_host_state($label, 'ready')
-		}
-		else {
-		    $self->_set_host_state($label, 'init');
-		}
-	    }
+	    $self->_set_host_state($label, 'ready')
+		if $in_state->{done}{$label};
 	}
     }
     return @labels;
 }
 
-sub _at_init {
+sub _audit_conns {
+    my $self = shift;
+    my $hosts = $self->{hosts};
+    my $num = 0;
+    $num++ for grep $_->{ssh}, values %$hosts;
+    $self->_debug(conns => "audit_conns counted: $num, saved: $self->{num_conns}");
+    $num == $self->{num_conns}
+	or die "internal error: wrong number of connections, counted: $num, saved: $self->{num_conns}";
+    my $in_state = $self->{in_state};
+    for my $state (keys %$in_state) {
+	my $num = 0;
+	$num++ for grep $hosts->{$_}{ssh}, keys %{$in_state->{$state}};
+	my $total = keys %{$in_state->{$state}};
+	print STDERR "conns in state $state: $num of $total\n";
+    }
+}
+
+sub _connect {
     my ($self, $label) = @_;
     my $host = $self->{hosts}{$label};
-    $self->_debug(at => "[$label] at_init, starting SSH connection");
-    $host->{ssh} and die "internal error: host in state init is already connected";
+    $self->_debug(connect => "[$label] _connect, starting SSH connection");
+    $host->{ssh} and die "internal error: connecting host is already connected";
     my $ssh = $host->{ssh} = Net::OpenSSH->new(expand_vars => 1,
 					       %{$host->{opts}},
 					       async => 1);
     $ssh->error and die "unable to create connection to host $label";
     $ssh->set_var(LABEL => $label);
+    $self->{num_conns}++;
     $self->_set_host_state($label, 'connecting');
-
 }
 
 sub _at_connecting {
@@ -178,8 +213,8 @@ sub _at_connecting {
 
 sub _join_notify {
     my ($self, $label, $join) = @_;
-    use Data::Dumper;
-    print STDERR Dumper $join;
+    # use Data::Dumper;
+    # print STDERR Dumper $join;
     delete $join->{depends}{$label}
 	or die "internal error: $join->{id} notified for non dependent label $label";
     $self->_debug(join => "removing dependent $label from join $join->{id}");
@@ -191,24 +226,56 @@ sub _join_notify {
 	    $self->_set_host_state($label, 'ready');
 	}
     }
-    print STDERR Dumper $join;
+    # print STDERR Dumper $join;
 }
 
 sub _num_workers {
     my $in_state = shift->{in_state};
-    keys(%{$in_state->{running}}) +
-	keys(%{$in_state->{connecting}});
+    ( keys(%{$in_state->{ready}}) +
+      keys(%{$in_state->{running}}) +
+      keys(%{$in_state->{connecting}}) );
+}
+
+sub _disconnect_host {
+    my ($self, $label) = @_;
+    my $host = $self->{hosts}{$label};
+    my $state = $host->{state};
+    $state =~ /^(?:waiting|suspended|done)$/
+	or die "internal error: disconnecting $label in state $state";
+    if ($host->{ssh}) {
+	$self->_debug(connect => "[$label] disconnecting host");
+	undef $host->{ssh};
+	$self->{num_conns}--;
+	$self->_set_host_state($label, $state);
+    }
+}
+
+sub _disconnect_any_host {
+    my $self = shift;
+    my $connected = $self->{connected};
+    $self->_debug(conns => "disconnect any host");
+    # $self->_audit_conns;
+    my $label;
+    for my $state (qw(suspended waiting)) {
+	# use Data::Dumper;
+	# print Dumper $connected;
+	$self->_debug(conns => "looking for connected host in state $state");
+	($label) = each %{$connected->{$state}};
+	keys %{$connected->{$state}}; # reset iterator
+	last if defined $label;
+    }
+    $self->_debug(conns => "[$label] disconnecting");
+    defined $label or die "internal error: unable to disconnect any host";
+    $self->_disconnect_host($label);
 }
 
 sub _at_ready {
     my ($self, $label) = @_;
     if (my $max_workers = $self->{max_workers}) {
 	my $in_state = $self->{in_state};
-	my $workers = ( keys(%{$in_state->{running}}) +
-			keys(%{$in_state->{connecting}}) );
 	my $num_workers = $self->_num_workers;
 	$self->_debug(workers => "num workers: $num_workers, maximun: $max_workers");
-	if ($num_workers >= $max_workers) {
+	if ($num_workers > $max_workers) {
 	    $self->_debug(workers => "[$label] suspending");
 	    $self->_set_host_state($label, 'suspended');
 	    return;
@@ -217,6 +284,15 @@ sub _at_ready {
 
     my $host = $self->{hosts}{$label};
     $self->_debug(at => "[$label] at_ready");
+
+    unless ($host->{ssh}) {
+	if (my $max_conns = $self->{max_conns}) {
+	    $self->_disconnect_any_host() if $self->{num_conns} >= $max_conns;
+	}
+	$self->_debug(at => "[$label] host is not connected, connecting...");
+	$self->_connect($label);
+    }
+
     my $queue = $host->{queue};
     while (my $task = shift @$queue) {
 	my $action = shift @$task;
@@ -252,8 +328,9 @@ sub _at_ready {
 	}
 	return;
     }
-    $self->_debug(at => "[$label] at_init, queue_is_empty, we are done!");
+    $self->_debug(at => "[$label] at_ready, queue_is_empty, we are done!");
     $self->_set_host_state($label, 'done');
+    $self->_disconnect_host($label);
 }
 
 sub _start_system {
@@ -262,7 +339,7 @@ sub _start_system {
     my $opts = shift;
     my $host = $self->{hosts}{$label};
     my $ssh = $host->{ssh};
-    $self->_debug(action => "[$label] start system action");
+    $self->_debug(action => "[$label] start system action [@_]");
     $ssh->spawn($opts, @_);
 }
 
@@ -341,44 +418,53 @@ sub run {
     my ($self, $time) = @_;
     my $hosts = $self->{hosts};
     my $max_workers = $self->{max_workers};
-    my $in_state = $self->{in_state};
-    my ($init, $connecting, $ready, $running, $waiting, $supended, $done)
-	= @{$in_state}{qw(init connecting ready running waiting suspended done)};
+    my ($connecting, $ready, $running, $waiting, $suspended, $done) =
+	@{$self->{in_state}}{qw(connecting ready running waiting suspended done)};
+    my ($connected_waiting, $connected_suspended) =
+	@{$self->{connected}}{qw(waiting suspended)};
     while (1) {
 	# use Data::Dumper;
 	# print STDERR Dumper $self;
 	$self->_debug(api => "run: iterating...");
 
+	$self->_debug(at => "run: hosts at connecting: ", scalar(keys %$connecting));
+	$self->_at_connecting($_) for keys %$connecting;
+
+	$self->_debug(at => "run: hosts at ready: ", scalar(keys %$ready));
+
+	# $self->_audit_conns;
+	$self->_at_ready($_) for keys %$ready;
+	# $self->_audit_conns;
+
+	if ($max_workers) {
+	    $self->_debug(at => "run: hosts at suspended:", scalar(keys %$suspended));
+	    if (%$suspended) {
+		my $awake = $max_workers - $self->_num_workers;
+		my @labels;
+		for my $hash ($connected_suspended, $suspended) {
+		    while ($awake > 0) {
+			my ($label) = each %$hash or last;
+			CORE::push @labels, $label;
+			$awake--;
+		    }
+		    for my $label (@labels) {
+			$self->_debug(workers => "[$label] awaking");
+			$self->_set_host_state($label, 'ready');
+		    }
+		    keys %$hash; # do we really need to reset the each iterator?
+		}
+	    }
+	}
+
+	$self->_debug(at => "run: hosts at waiting: ", scalar(keys %$waiting));
+	$self->_debug(at => "run: hosts at running: ", scalar(keys %$running));
 	$self->_debug(at => "run: hosts at done: ", scalar(keys %$done), " of ", scalar(keys %$hosts));
 
 	return 1 if keys(%$hosts) == keys(%$done);
 
-	$self->_debug(at => "run: hosts at init: ", scalar(keys %$init));
-	$self->_at_init($_) for keys %$init;
-
-	$self->_at_connecting($_) for keys %$connecting;
-	$self->_debug(at => "run: hosts at connecting: ", scalar(keys %$connecting));
-
-	$self->_debug(at => "run: hosts at waiting: ", scalar(keys %$waiting));
-
-	$self->_debug(at => "run: hosts at ready: ", scalar(keys %$ready));
-	$self->_at_ready($_) for keys %$ready;
-
-	if ($max_workers and %$suspended) {
-	    my $awake = $max_workers - $self->_num_workers;
-	    while ($awake-- > 0 and %$suspended) {
-		$inmediate = 1;
-		my ($label) = each %$suspended;
-		$self->_set_host_state($label, 'ready');
-	    }
-	    keys %$suspended; # do we really need to reset the each iterator?
-	}
-
-	my $time = ( (%$init || %$ready) ? 0   :
-		     %$connecting        ? 0.1 :
-		                           3.0);
-
-	$self->_debug(at => "run: hosts at running: ", scalar(keys %$running));
+	my $time = ( %$ready      ? 0   :
+		     %$connecting ? 0.1 :
+		                    3.0 );
 	$self->_wait_for_jobs($time);
     }
 }
