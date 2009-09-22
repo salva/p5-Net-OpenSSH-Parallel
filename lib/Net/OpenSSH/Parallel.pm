@@ -14,6 +14,7 @@ sub new {
     my ($class, %opts) = @_;
 
     my $debug = delete $opts{debug};
+    my $max_workers = delete $opts{maximum_workers};
     %opts and croak "unknonwn option(s): ". join(", ", keys %opts);
 
     my $self = { joins => {},
@@ -27,15 +28,17 @@ sub new {
 			      done => {},
 			      waiting => {},
 			      error => {},
+			      suspended => {},
 			     },
 		 joins => {},
 		 debug => $debug || 0,
+		 max_workers => $max_workers,
 	       };
     bless $self, $class;
     $self;
 }
 
-my %debug_channel = (api => 1, state => 2, select => 4, at => 8, action => 16, join => 32);
+my %debug_channel = (api => 1, state => 2, select => 4, at => 8, action => 16, join => 32, workers => 64);
 
 sub _debug {
     my $self = shift;
@@ -191,8 +194,27 @@ sub _join_notify {
     print STDERR Dumper $join;
 }
 
+sub _num_workers {
+    my $in_state = shift->{in_state};
+    keys(%{$in_state->{running}}) +
+	keys(%{$in_state->{connecting}});
+}
+
 sub _at_ready {
     my ($self, $label) = @_;
+    if (my $max_workers = $self->{max_workers}) {
+	my $in_state = $self->{in_state};
+	my $workers = ( keys(%{$in_state->{running}}) +
+			keys(%{$in_state->{connecting}}) );
+	my $num_workers = $self->_num_workers;
+	$self->_debug(workers => "num workers: $num_workers, maximun: $max_workers");
+	if ($num_workers >= $max_workers) {
+	    $self->_debug(workers => "[$label] suspending");
+	    $self->_set_host_state($label, 'suspended');
+	    return;
+	}
+    }
+
     my $host = $self->{hosts}{$label};
     $self->_debug(at => "[$label] at_ready");
     my $queue = $host->{queue};
@@ -318,9 +340,10 @@ sub _wait_for_jobs {
 sub run {
     my ($self, $time) = @_;
     my $hosts = $self->{hosts};
+    my $max_workers = $self->{max_workers};
     my $in_state = $self->{in_state};
-    my ($init, $connecting, $ready, $running, $waiting, $done)
-	= @{$in_state}{qw(init connecting ready running waiting done)};
+    my ($init, $connecting, $ready, $running, $waiting, $supended, $done)
+	= @{$in_state}{qw(init connecting ready running waiting suspended done)};
     while (1) {
 	# use Data::Dumper;
 	# print STDERR Dumper $self;
@@ -340,6 +363,16 @@ sub run {
 
 	$self->_debug(at => "run: hosts at ready: ", scalar(keys %$ready));
 	$self->_at_ready($_) for keys %$ready;
+
+	if ($max_workers and %$suspended) {
+	    my $awake = $max_workers - $self->_num_workers;
+	    while ($awake-- > 0 and %$suspended) {
+		$inmediate = 1;
+		my ($label) = each %$suspended;
+		$self->_set_host_state($label, 'ready');
+	    }
+	    keys %$suspended; # do we really need to reset the each iterator?
+	}
 
 	my $time = ( (%$init || %$ready) ? 0   :
 		     %$connecting        ? 0.1 :
