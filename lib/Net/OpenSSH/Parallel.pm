@@ -514,16 +514,16 @@ Net::OpenSSH::Parallel - Run SSH jobs in parallel
 
 Run this here, that there, etc.
 
-L<Net::OpenSSH::Parallel> is a parallel scheduller that can run
+C<Net::OpenSSH::Parallel> is a parallel scheduler that can run
 commands in a set of hosts in parallel through SSH.
 
-The more common usage of the module follows this structure:
+The more common usage of the module follows this schema:
 
 =over
 
 =item *
 
-create the L<Net::OpenSSH::Parallel> object
+create a C<Net::OpenSSH::Parallel> object
 
 =item *
 
@@ -536,8 +536,8 @@ operations, etc.) using the L</push> method.
 
 =item *
 
-let the parallel scheduller take care of everything calling the
-L</run> method.
+let the parallel scheduler take care of everything calling the
+L</run> method
 
 =back
 
@@ -547,7 +547,7 @@ Several of the methods of this module accept a selector string to
 determine which of the registered hosts should be affected by the
 operation.
 
-For instance, in:
+For instance, in...
 
   $pssh->push('*', system => 'ls')
 
@@ -559,6 +559,46 @@ Other possible selectors are:
   'bar*'                # selects everything beginning by 'bar'
   'foo1,foo3,foo6'      # selects the hosts of the given names
   'bar*,foo1,foo3,foo6' # both
+
+=head2 Local resource usage
+
+When the number of hosts managed by the scheduler is to high, the
+local node can become overloaded.
+
+Roughly, every SSH connection requires two local C<ssh> processes
+(one to run the SSH connection and another one to launch the remote
+command) that results in around 5MB of RAM usage per host.
+
+CPU usage varies greatly depending on the tasks carried out. The most
+expensive are short remote tasks (because of the local process
+creation and destruction overhead) and tasks that transfer big
+ammounts of data through SSH (because of the encryption).
+
+In practice, CPU usage doesn't matter too much (mostly because there
+is not too much we can do to reduce it!) and it is RAM about what
+we should be more concerned.
+
+The module accepts two parameters to limit resource usage:
+
+=over
+
+=item * C<maximum_workers>
+
+is the maximun number of remote commands that can be running concurrently.
+
+=item * C<maximum_connections>
+
+is the maximum number of SSH connections that can be active concurrently.
+
+=back
+
+In practice, limiting maximum_connections indirectly limits RAM
+usage and limiting the maximum_workers indirectly limits CPU usage.
+
+The module requires that C<maximum_connections> to be at least equal
+or bigger than C<maximum_workers>, and it is recomended that
+C<maximum_connections E<gt>>= 2 * maximum_workers> (otherwise the
+scheduler will not be able to reuse connections efficiently).
 
 =head2 API
 
@@ -576,7 +616,7 @@ The accepted options are:
 
 =item workers => $max_workers
 
-sets the maximum number of operations carried out in parallel.
+sets the maximum number of operations that can be carried out in parallel.
 
 =item connections => $max_conns
 
