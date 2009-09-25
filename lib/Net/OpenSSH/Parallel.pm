@@ -764,6 +764,17 @@ runs the queued operations.
 
 =back
 
+=head1 TODO
+
+=over
+
+=item * implement better error handling
+
+now is an all or nothing approach, when something fails the full
+process is aborted.
+
+=back
+
 =head1 SEE ALSO
 
 L<Net::OpenSSH>
