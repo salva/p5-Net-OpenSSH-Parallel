@@ -119,6 +119,10 @@ sub _select_labels {
     return @labels;
 }
 
+my %action_alias = (get => 'scp_get',
+		    put => 'scp_put',
+		    cmd => 'command');
+
 sub push {
     my $self = shift;
     my $selector = shift;
@@ -131,8 +135,11 @@ sub push {
 	unshift @_, $action;
     }
 
-    $action =~ /^(?:system|scp_get|scp_put|join|_notify)$/
-	or croak "bad action";
+    my $alias = $action_alias{$action};
+    $action = $alias if defined $alias;
+
+    $action =~ /^(?:command|scp_get|scp_put|join|sub|_notify)$/
+	or croak "bad action '$action'";
 
     my @labels = $self->_select_labels($selector);
 
@@ -333,13 +340,13 @@ sub _at_ready {
     $self->_disconnect_host($label);
 }
 
-sub _start_system {
+sub _start_command {
     my $self = shift;
     my $label = shift;
     my $opts = shift;
     my $host = $self->{hosts}{$label};
     my $ssh = $host->{ssh};
-    $self->_debug(action => "[$label] start system action [@_]");
+    $self->_debug(action => "[$label] start command action [@_]");
     $ssh->spawn($opts, @_);
 }
 
@@ -503,9 +510,9 @@ Net::OpenSSH::Parallel - Run SSH jobs in parallel
   $pssh->add_host($_) for @hosts;
 
   $pssh->push('*', scp_put => '/local/file/path', '/remote/file/path');
-  $pssh->push('*', system => 'gurummm',
+  $pssh->push('*', command => 'gurummm',
               '/remote/file/path', '/tmp/output');
-  $pssh->push($special_host, system => 'prumprum', '/tmp/output');
+  $pssh->push($special_host, command => 'prumprum', '/tmp/output');
   $pssh->push('*', scp_get => '/tmp/output', 'logs/%HOST%/output');
 
   $pssh->run;
@@ -514,10 +521,18 @@ Net::OpenSSH::Parallel - Run SSH jobs in parallel
 
 Run this here, that there, etc.
 
-C<Net::OpenSSH::Parallel> is a parallel scheduler that can run
-commands in a set of hosts in parallel through SSH.
+  ***
+  *** Note: This is an early release!
+  ***
+  *** The module design and particularly the public API has not yet
+  *** stabilized. Future versions of the module are not guaranteed to
+  *** remain compatible with this one yet.
+  ***
 
-The more common usage of the module follows this schema:
+C<Net::OpenSSH::Parallel> is a parallel scheduler that can run
+commands in a set of hosts through SSH in parallel.
+
+Common usage of the module follows this schema:
 
 =over
 
@@ -531,15 +546,29 @@ register the hosts where you want to run commands with the L</add_host> method
 
 =item *
 
-queue the actions you want to run (remote commands, remote file copy
-operations, etc.) using the L</push> method.
+queue the actions you want to run (commands, file copy operations,
+etc.) using the L</push> method.
 
 =item *
 
-let the parallel scheduler take care of everything calling the
-L</run> method
+call the L</run> method and let the parallel scheduler take care of
+everything!
 
 =back
+
+=head2 Labelling hosts
+
+Every host is identified by an unique label that is given when the
+host is registered into the parallel scheduller. Usually, the host
+name is used also as the label, but this is not required by the
+module.
+
+The rationale behind using labels is that the hostname does not
+necessarily identify unique "remote processors" (for instance,
+sometimes your logical "remote processors" may be user accounts
+distributed over a set of hosts: C<foo1@bar1>, C<foo2@bar1>,
+C<foo3@bar2>, ...; a set of hosts that are accesible behind an unique
+IP, listening in different ports; etc.)
 
 =head2 Selecting hosts
 
@@ -549,7 +578,7 @@ operation.
 
 For instance, in...
 
-  $pssh->push('*', system => 'ls')
+  $pssh->push('*', command => 'ls')
 
 the first argument is the selector. In this case C<*> means all the
 registered hosts.
@@ -559,10 +588,14 @@ Other possible selectors are:
   'bar*'                # selects everything beginning by 'bar'
   'foo1,foo3,foo6'      # selects the hosts of the given names
   'bar*,foo1,foo3,foo6' # both
+  '*doz*'               # everything containing 'doz'
+
+I<Note: I am still considering how the selector mini-language should
+be, don't hesitate to send your suggestions!>
 
 =head2 Local resource usage
 
-When the number of hosts managed by the scheduler is to high, the
+When the number of hosts managed by the scheduler is too high, the
 local node can become overloaded.
 
 Roughly, every SSH connection requires two local C<ssh> processes
@@ -572,11 +605,12 @@ command) that results in around 5MB of RAM usage per host.
 CPU usage varies greatly depending on the tasks carried out. The most
 expensive are short remote tasks (because of the local process
 creation and destruction overhead) and tasks that transfer big
-ammounts of data through SSH (because of the encryption).
+ammounts of data through SSH (because of the encryption going on).
 
-In practice, CPU usage doesn't matter too much (mostly because there
-is not too much we can do to reduce it!) and it is RAM about what
-we should be more concerned.
+In practice, CPU usage doesn't matter too much (mostly because the OS
+would be able to manage it but also because there is not too many
+things we can do to reduce it) and usually it is RAM about what we
+should be more concerned.
 
 The module accepts two parameters to limit resource usage:
 
@@ -592,13 +626,35 @@ is the maximum number of SSH connections that can be active concurrently.
 
 =back
 
-In practice, limiting maximum_connections indirectly limits RAM
-usage and limiting the maximum_workers indirectly limits CPU usage.
+In practice, limiting C<maximum_connections> indirectly limits RAM
+usage and limiting the C<maximum_workers> indirectly limits CPU usage.
 
-The module requires that C<maximum_connections> to be at least equal
+The module requires C<maximum_connections> to be at least equal
 or bigger than C<maximum_workers>, and it is recomended that
-C<maximum_connections E<gt>>= 2 * maximum_workers> (otherwise the
+C<maximum_connections E<gt>= 2 * maximum_workers> (otherwise the
 scheduler will not be able to reuse connections efficiently).
+
+You will have to experiment to find out which combinations give the
+best results in your particular scenarios.
+
+Also, for small sets of hosts you can just let these parameters
+unlimited.
+
+=head2 Variable expansion
+
+This module activates L<Net::OpenSSH> L<variable
+expansion|Net::OpenSSH/Variable expansion> by default. That way, it is
+possible to parametrice easily the actions executed on every host in
+base to some of its properties.
+
+For instance:
+
+  $pssh->queue('*', scp_get => "/var/log/messages", "messages.%HOST%");
+
+copies the remote log files appending the origin host name to the
+local file names.
+
+The variables C<HOST>, C<USER>, C<PORT> and C<LABEL> are predefined.
 
 =head2 API
 
@@ -614,19 +670,19 @@ The accepted options are:
 
 =over
 
-=item workers => $max_workers
+=item workers => $maximum_workers
 
 sets the maximum number of operations that can be carried out in parallel.
 
-=item connections => $max_conns
+=item connections => $maximum_connections
 
 sets the maximum number of SSH connections that can be stablished simultaneously.
 
-$max_conns must be equeal or bigger than $max_workers
+$maximum_connections must be equal or bigger than $maximum_workers
 
 =item debug => $debug
 
-select the level of debugging you want (0 => nothing, -1 => maximum).
+select the level of debugging you want (0 => nothing, ~0 => maximum).
 
 =back
 
@@ -634,15 +690,14 @@ select the level of debugging you want (0 => nothing, -1 => maximum).
 
 =item $pssh->add_host($label, $host, %opts)
 
-registers a new host into the parallel L<Net::OpenSSH::Parallel> object.
+registers a new host into the C<$pssh> object.
 
 C<$label> is the name used to refer to the registered host afterwards.
 
 When only an argument is passed it is used both as the label and as the hostname.
 
-=item $pssh->run
-
-runs the queued operations
+Currently, L<Net::OpenSSH::Parallel> does not consumes any option and
+the contents of C<%opts> are passed to L<Net::OpenSSH> constructor.
 
 =item $pssh->push($selector, $action, \%opts, @action_args)
 
@@ -654,15 +709,15 @@ The supported actions are:
 
 =over
 
-=item system => @cmd
+=item command => @cmd
 
 queue the given shell command on the selected hosts.
 
 Example:
 
-  $self->push('*', 'system'
-              { stdout_fh => $log, stderr_to_stdout => 1 },
-              'find', '/');
+  $self->push('*', 'command'
+              { stdout_fh => $find_fh, stderr_to_stdout => 1 },
+              'find', '/my/dir');
 
 =item scp_get => @remote, $local
 
@@ -683,17 +738,29 @@ When given, the C<\%opts> argument can contain the following options:
 
 =item on_error => sub { }
 
+not implemented yet!
+
 =item on_error => $fail_mode
+
+not implemented yet!
 
 =item timeout => $seconds
 
+not implemented yet!
+
 =item on_done => sub { }
+
+not implemented yet!
 
 =back
 
 Any other option will be passed to the corresponding L<Net::OpenSSH>
 method (L<spawn|Net::OpenSSH/spawn>, L<scp_put|Net::OpenSSH/scp_put>,
 etc.).
+
+=item $pssh->run
+
+runs the queued operations.
 
 =back
 
