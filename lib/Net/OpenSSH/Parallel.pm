@@ -7,6 +7,8 @@ use warnings;
 use Carp qw(croak carp verbose);
 
 use Net::OpenSSH;
+use Net::OpenSSH::Parallel::Constants qw(:error :on_error);
+
 use POSIX qw(WNOHANG);
 use Time::HiRes qw(time);
 
@@ -16,6 +18,7 @@ sub new {
     my $debug = delete $opts{debug};
     my $max_workers = delete $opts{workers};
     my $max_conns = delete $opts{connections};
+    my $on_error = delete $opts{on_error};
 
     if ($max_conns) {
 	if ($max_workers) {
@@ -49,12 +52,15 @@ sub new {
 		 max_workers => $max_workers,
 		 max_conns => $max_conns,
 		 num_conns => 0,
+		 on_error => $on_error,
 	       };
     bless $self, $class;
     $self;
 }
 
-my %debug_channel = (api => 1, state => 2, select => 4, at => 8, action => 16, join => 32, workers => 64, connect => 128, conns => 256);
+my %debug_channel = (api => 1, state => 2, select => 4, at => 8,
+		     action => 16, join => 32, workers => 64,
+		     connect => 128, conns => 256);
 
 sub _debug {
     my $self = shift;
@@ -68,8 +74,19 @@ sub _debug {
 
 sub add_host {
     my $self = shift;
-    my $host = Net::OpenSSH::Parallel::Host->new(@_);
-    my $label = $host->{label};
+    my $label = shift;
+    $label =~ /([,*!()<>\/{}])/ and croak "invalid char '$1' in host label";
+    my %opts = (@_ & 1 ? (host => @_) : @_);
+    $opts{host} = $label unless defined $opts{host};
+
+    my $host = { label => $label,
+		 workers => 1,
+		 opts => \%opts,
+		 ssh => undef,
+		 state => 'done',
+		 queue => []
+	       };
+
     $self->{hosts}{$label} = $host;
     $self->_debug(api => "[$label] added ($host)");
     $self->{in_state}{done}{$label} = 1;
@@ -143,6 +160,12 @@ sub push {
 
     my @labels = $self->_select_labels($selector);
 
+    if (keys %opts and
+	($action eq 'join' or
+	 $action eq 'sub')) {
+	croak "$action action does not accept options";
+    }
+
     if ($action eq 'join') {
 	my $notify_selector = shift @_;
 	my $join = { id => '#' . $self->{join_seq}++,
@@ -190,7 +213,71 @@ sub _audit_conns {
     }
 }
 
-sub _connect {
+sub _at_error {
+    my ($self, $label, $error) = @_;
+    my $host = $self->{hosts}{$label};
+    my $task = delete $host->{current_task};
+
+    my $on_error;
+    if ($error == OSSH_MASTER_FAILED and
+	$host->{status} ne 'connecting') {
+	# it seems we have just lost the connection to the
+	# remote host, retry unconditionally!
+	$on_error = OSSH_ON_ERROR_RETRY
+    }
+    else {
+	$on_error = $task->[1]{on_error} if $task;
+	$on_error ||= $host->{on_error};
+	$on_error ||= $self->{on_error};
+
+	if (ref $on_error eq 'CODE') {
+	    if ($error == OSSH_JOIN_FAILED) {
+		$on_error = $on_error->($self, $label, $error);
+	    }
+	    else {
+		$on_error = $on_error->($self, $label, $error, $task);
+	    }
+	}
+
+	$on_error = $on_error->($self, $label, $error, $task)
+	    if ref $on_error eq 'CODE';
+
+	$on_error ||= OSSH_ON_ERROR_ABORT;
+    }
+
+    if ($on_error == OSSH_ON_ERROR_IGNORE) {
+	if ($error == OSSH_MASTER_FAILED) {
+	    # stablishing a new connection failed, what we should do?
+	    # currently we remove the next task from the queue and
+	    # continue.
+	    shift @{$host->{queue}};
+	    $self->_set_host_status($label, 'ready');
+	    $self->_disconnect_host($label);
+	}
+    }
+    elsif ($on_error == OSSH_ON_ERROR_DONE or
+	   $on_error == OSSH_ON_ERROR_ABORT or
+	   $on_error == OSSH_ON_ERROR_ABORT_ALL) {
+	my $queue = $self->{queue};
+	my $failed = ($on_error != OSSH_ON_ERROR_DONE);
+	while (my $task = shift @$queue) {
+	    my ($action, undef, $join) = @$task;
+	    $self->_join_notify($label, $join, $failed)
+		if $action eq '_notify';
+	}
+
+	$on_error == OSSH_ON_ERROR_ABORT_ALL
+	    and $self->{abort_all} = 1;
+
+	$self->_set_host_state($label, 'done');
+	$self->_disconnect_host($label);
+    }
+    else {
+	die "unknown on_error code $on_error"
+    }
+}
+
+sub _at_connect {
     my ($self, $label) = @_;
     my $host = $self->{hosts}{$label};
     $self->_debug(connect => "[$label] _connect, starting SSH connection");
@@ -198,10 +285,12 @@ sub _connect {
     my $ssh = $host->{ssh} = Net::OpenSSH->new(expand_vars => 1,
 					       %{$host->{opts}},
 					       async => 1);
-    $ssh->error and die "unable to create connection to host $label";
     $ssh->set_var(LABEL => $label);
     $self->{num_conns}++;
     $self->_set_host_state($label, 'connecting');
+    if ($ssh->error) {
+	$self->_at_error($label, $ssh->error);
+    }
 }
 
 sub _at_connecting {
@@ -214,23 +303,25 @@ sub _at_connecting {
 	$self->_set_host_state($label, 'ready');
     }
     elsif ($ssh->error) {
-	die "connection to $label failed: ". $ssh->error;
+	$self->_at_error($label, $ssh->error);
     }
 }
 
 sub _join_notify {
-    my ($self, $label, $join) = @_;
+    my ($self, $label, $join, $failed) = @_;
     # use Data::Dumper;
     # print STDERR Dumper $join;
     delete $join->{depends}{$label}
 	or die "internal error: $join->{id} notified for non dependent label $label";
     $self->_debug(join => "removing dependent $label from join $join->{id}");
+    $join->{failed} = 1 if $failed;
     if (not %{$join->{depends}}) {
 	$self->_debug(join => "join $join->{id} done");
 	$join->{done} = 1;
+	my $failed = $join->{failed};
 	for my $label (@{$join->{notify}}) {
 	    $self->_debug(join => "notifying $label about join $join->{id} done");
-	    $self->_set_host_state($label, 'ready');
+	    $self->_set_host_state($label, $failed ? 'join_failed' : 'ready');
 	}
     }
     # print STDERR Dumper $join;
@@ -247,7 +338,7 @@ sub _disconnect_host {
     my ($self, $label) = @_;
     my $host = $self->{hosts}{$label};
     my $state = $host->{state};
-    $state =~ /^(?:waiting|suspended|done)$/
+    $state =~ /^(?:waiting|suspended|done|connecting)$/
 	or die "internal error: disconnecting $label in state $state";
     if ($host->{ssh}) {
 	$self->_debug(connect => "[$label] disconnecting host");
@@ -297,7 +388,8 @@ sub _at_ready {
 	    $self->_disconnect_any_host() if $self->{num_conns} >= $max_conns;
 	}
 	$self->_debug(at => "[$label] host is not connected, connecting...");
-	$self->_connect($label);
+	$self->_at_connect($label);
+	return;
     }
 
     my $queue = $host->{queue};
@@ -305,8 +397,12 @@ sub _at_ready {
 	my $action = shift @$task;
 	$self->_debug(at => "[$label] at_ready, starting new action $action");
 	if ($action eq 'join') {
-	    my ($opts, $join) = @$task;
+	    my (undef, $join) = @$task;
 	    if ($join->{done}) {
+		if ($join->{failed}) {
+		    $self->_at_error($label, OSSH_JOIN_FAILED);
+		    return;
+		}
 		$self->_debug(action => "[$label] join $join->{id} already done");
 		next;
 	    }
@@ -314,22 +410,27 @@ sub _at_ready {
 	    $self->_set_host_state($label, 'waiting');
 	}
 	elsif ($action eq '_notify') {
-	    my ($opts, $join) = @$task;
+	    my (undef, $join) = @$task;
 	    $self->_join_notify($label, $join);
 	    next;
 	}
 	elsif ($action eq 'sub') {
-	    my $opts = shift @$task;
-	    my $sub = shift @$task;
+	    my (undef, $sub) = @$task;
 	    $self->_debug(action => "[$label] calling sub $sub");
 	    $sub->($self, $label, @$task);
 	    next;
 	}
 	else {
+	    $host->{current_task} = [$action => @$task];
+	    my %opts = %{shift @$task};
+	    delete $opts{on_error};
 	    my $method = "_start_$action";
 	    my $pid = $self->$method($label, @$task);
-	    $pid or die "action $action failed to start: ". $host->{ssh}->error;
-	    $self->_debug(action => "[$label] action pid: $pid");
+	    $self->_debug(action => "[$label] action pid: ", $pid);
+	    unless (defined $pid) {
+		$self->_at_error($label, $host->{ssh}->error || OSSH_SLAVE_FAILED);
+		return;
+	    }
 	    $self->{host_by_pid}{$pid} = $label;
 	    $self->_set_host_state($label, 'running');
 	}
@@ -378,12 +479,15 @@ sub _start_join {
 }
 
 sub _finish_action {
-    my ($self, $pid, $rc) = @_;
+    my ($self, $pid) = @_;
     my $label = delete $self->{host_by_pid}{$pid};
     if (defined $label) {
-	$self->_debug(action => "[$label] action finished pid: $pid, rc: $rc");
+	$self->_debug(action => "[$label] action finished pid: $pid, rc: $?");
 	$self->_set_host_state($label, 'ready');
-	$rc and die "$label child (pid: $pid) exited with non-zero return code (rc: $rc)";
+	if ($?) {
+	    $self->_at_error($label,
+			     dualvar(OSSH_SLAVE_FAILED, "child exited with non-zero return code"));
+	}
     }
     else {
 	carp "espourios child exit (pid: $pid)";
@@ -402,11 +506,10 @@ sub _wait_for_jobs {
 	    $self->_debug(at => "_wait_for_jobs reaping children");
 	    while (1) {
 		my $pid = waitpid(-1, WNOHANG);
-		my $rc = $?;
 		last if $pid <= 0;
-		$self->_debug(action => "waitpid caught pid: $pid, rc: $rc");
+		$self->_debug(action => "waitpid caught pid: $pid, rc: $?");
 		$dontwait = 1;
-		$self->_finish_action($pid, $rc);
+		$self->_finish_action($pid);
 	    }
 	}
 	$dontwait and return 1;
@@ -476,25 +579,6 @@ sub run {
     }
 }
 
-package Net::OpenSSH::Parallel::Host;
-use Carp;
-
-sub new {
-    my $class = shift;
-    my $label = shift;
-    $label =~ /([,*!()<>\/{}])/ and croak "invalid char '$1' in host label";
-    my %opts = (@_ & 1 ? (host => @_) : @_);
-    $opts{host} = $label unless defined $opts{host};
-
-    my $self = { label => $label,
-		 workers => 1,
-		 opts => \%opts,
-		 ssh => undef,
-		 state => 'done',
-		 queue => []};
-    bless $self, $class;
-}
-
 1;
 __END__
 
@@ -526,13 +610,17 @@ Run this here, that there, etc.
   ***
   *** The module design and particularly the public API has not yet
   *** stabilized. Future versions of the module are not guaranteed to
-  *** remain compatible with this one yet.
+  *** remain compatible with this one.
   ***
 
 C<Net::OpenSSH::Parallel> is a parallel scheduler that can run
 commands in a set of hosts through SSH in parallel.
 
-Common usage of the module follows this schema:
+This module tries to find a compromise between being simple to use,
+efficient and covering a good part of the problem space of parallel
+process execution via SSH.
+
+Common usage of the module is as follows:
 
 =over
 
@@ -542,7 +630,8 @@ create a C<Net::OpenSSH::Parallel> object
 
 =item *
 
-register the hosts where you want to run commands with the L</add_host> method
+register the hosts where you want to run commands with the
+L</add_host> method
 
 =item *
 
@@ -563,7 +652,7 @@ host is registered into the parallel scheduller. Usually, the host
 name is used also as the label, but this is not required by the
 module.
 
-The rationale behind using labels is that the hostname does not
+The rationale behind using labels is that a hostname does not
 necessarily identify unique "remote processors" (for instance,
 sometimes your logical "remote processors" may be user accounts
 distributed over a set of hosts: C<foo1@bar1>, C<foo2@bar1>,
@@ -618,11 +707,13 @@ The module accepts two parameters to limit resource usage:
 
 =item * C<maximum_workers>
 
-is the maximun number of remote commands that can be running concurrently.
+is the maximun number of remote commands that can be running
+concurrently.
 
 =item * C<maximum_connections>
 
-is the maximum number of SSH connections that can be active concurrently.
+is the maximum number of SSH connections that can be active
+concurrently.
 
 =back
 
@@ -672,11 +763,13 @@ The accepted options are:
 
 =item workers => $maximum_workers
 
-sets the maximum number of operations that can be carried out in parallel.
+sets the maximum number of operations that can be carried out in
+parallel.
 
 =item connections => $maximum_connections
 
-sets the maximum number of SSH connections that can be stablished simultaneously.
+sets the maximum number of SSH connections that can be stablished
+simultaneously.
 
 $maximum_connections must be equal or bigger than $maximum_workers
 
@@ -686,7 +779,7 @@ select the level of debugging you want (0 => nothing, ~0 => maximum).
 
 =back
 
-=item $pssh->add_host($host)
+=item $pssh->add_host($label, %opts)
 
 =item $pssh->add_host($label, $host, %opts)
 
@@ -694,7 +787,8 @@ registers a new host into the C<$pssh> object.
 
 C<$label> is the name used to refer to the registered host afterwards.
 
-When only an argument is passed it is used both as the label and as the hostname.
+When the hostname argument is ommited, the label is used also as the
+hostname.
 
 Currently, L<Net::OpenSSH::Parallel> does not consumes any option and
 the contents of C<%opts> are passed to L<Net::OpenSSH> constructor.
@@ -773,15 +867,31 @@ runs the queued operations.
 now is an all or nothing approach, when something fails the full
 process is aborted.
 
+=item * run N processes per host concurrently
+
+allow running more than one process per remote server concurrently
+
 =back
 
 =head1 SEE ALSO
 
-L<Net::OpenSSH>
+L<Net::OpenSSH> is used to manage the SSH connections to the remote
+hosts.
+
+L<SSH::Batch> has a similar focus as this module. In my opinion it is
+simpler to use but rather more limited.
+
+L<GRID::Machine> allows to run perl code distributed in a cluster via
+SSH.
+
+If your application requires orchestating workflows more complex that
+those supported by L<Net::OpenSSH::Parallel>, you should probably
+consider some L<POE> based solution.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright E<copy> 2009 by Salvador FandiE<ntilde>o.
+Copyright E<copy> 2009 by Salvador FandiE<ntilde>o
+(sfandino@yahoo.com).
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.10.0 or,
