@@ -873,6 +873,17 @@ allow running more than one process per remote server concurrently
 
 =back
 
+=head1 BUGS AND SUPPORT
+
+This is a very early release of the module, lots of bugs should be
+expected!!!
+
+If you find any report it via L<http://rt.cpan.org> or by email (to
+sfandino@yahoo.com), please. Feedback and comments are also welcome!
+
+The source code for this module is hosted at GitHub:
+L<http://github.com/salva/p5-Net-OpenSSH-Parallel>
+
 =head1 SEE ALSO
 
 L<Net::OpenSSH> is used to manage the SSH connections to the remote
