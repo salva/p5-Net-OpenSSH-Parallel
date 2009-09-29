@@ -9,7 +9,7 @@ $Net::OpenSSH::debug = -1;
 
 my $hosts = 4;
 
-my $osp = Net::OpenSSH::Parallel->new(workers => 5, connections => 5, debug => 0); #1|128|256);
+my $osp = Net::OpenSSH::Parallel->new(workers => 5, connections => 5, debug => -1); #1|128|256);
 $osp->add_host("host-$_", "localhost") for 1..$hosts;
 $osp->add_host("foo", "foo", on_error => OSSH_ON_ERROR_ABORT);
 $osp->push('*', cmd => 'echo %LABEL% starting');

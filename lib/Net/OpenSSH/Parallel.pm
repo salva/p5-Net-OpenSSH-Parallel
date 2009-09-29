@@ -35,6 +35,7 @@ sub new {
     my $self = { joins => {},
 		 hosts => {},
 		 host_by_pid => {},
+		 ssh_master_by_pid => {},
 		 in_state => {
 			      connecting => {},
 			      ready => {},
@@ -61,7 +62,7 @@ sub new {
 
 my %debug_channel = (api => 1, state => 2, select => 4, at => 8,
 		     action => 16, join => 32, workers => 64,
-		     connect => 128, conns => 256);
+		     connect => 128, conns => 256, error => 512);
 
 sub _debug {
     my $self = shift;
@@ -228,7 +229,7 @@ sub _at_error {
 
     my $on_error;
     if ($error == OSSH_MASTER_FAILED and
-	$host->{status} ne 'connecting') {
+	$host->{state} ne 'connecting') {
 	# it seems we have just lost the connection to the
 	# remote host, retry unconditionally!
 	$on_error = OSSH_ON_ERROR_RETRY
@@ -253,12 +254,16 @@ sub _at_error {
 	$on_error ||= OSSH_ON_ERROR_ABORT;
     }
 
+    $self->_debug(error => "[$label] on_error: $on_error");
+
+    my $queue = $host->{queue};
+
     if ($on_error == OSSH_ON_ERROR_IGNORE) {
 	if ($error == OSSH_MASTER_FAILED) {
 	    # stablishing a new connection failed, what we should do?
 	    # currently we remove the next task from the queue and
 	    # continue.
-	    shift @{$host->{queue}};
+	    shift @$queue;
 	    $self->_set_host_status($label, 'ready');
 	    $self->_disconnect_host($label);
 	}
@@ -266,10 +271,12 @@ sub _at_error {
     elsif ($on_error == OSSH_ON_ERROR_DONE or
 	   $on_error == OSSH_ON_ERROR_ABORT or
 	   $on_error == OSSH_ON_ERROR_ABORT_ALL) {
-	my $queue = $self->{queue};
+	my $queue = $host->{queue};
 	my $failed = ($on_error != OSSH_ON_ERROR_DONE);
+	$self->_debug(error => "[$label] dropping queue, ", scalar(@$queue), " jobs");
 	while (my $task = shift @$queue) {
 	    my ($action, undef, $join) = @$task;
+	    $self->_debug(error => "[$label] remove action $action from queue");
 	    $self->_join_notify($label, $join, $failed)
 		if $action eq '_notify';
 	}
@@ -279,6 +286,10 @@ sub _at_error {
 
 	$self->_set_host_state($label, 'done');
 	$self->_disconnect_host($label);
+	$host->{error} = $error;
+    }
+    elsif ($on_error == OSSH_ON_ERROR_RETRY) {
+	unshift @$queue, $task;
     }
     else {
 	die "unknown on_error code $on_error"
@@ -294,6 +305,9 @@ sub _at_connect {
 					       %{$host->{opts}},
 					       async => 1);
     $ssh->set_var(LABEL => $label);
+    my $master_pid = $ssh->get_master_pid;
+    $host->{master_pid} = $master_pid;
+    $self->{ssh_master_by_pid}{$master_pid} = $label;
     $self->{num_conns}++;
     $self->_set_host_state($label, 'connecting');
     if ($ssh->error) {
@@ -350,6 +364,9 @@ sub _disconnect_host {
 	or die "internal error: disconnecting $label in state $state";
     if ($host->{ssh}) {
 	$self->_debug(connect => "[$label] disconnecting host");
+	my $master_pid = delete $host->{master_pid};
+	delete $self->{ssh_master_by_pid}{$master_pid}
+	    if defined $master_pid;
 	undef $host->{ssh};
 	$self->{num_conns}--;
 	$self->_set_host_state($label, $state);
@@ -498,7 +515,16 @@ sub _finish_action {
 	}
     }
     else {
-	carp "espourios child exit (pid: $pid)";
+	my $label = delete $self->{ssh_master_by_pid}{$pid};
+	if (defined $label) {
+	    $self->_debug(action => "[$label] master ssh exited");
+	    my $ssh = $self->{hosts}{$label}{ssh};
+	    defined $ssh or die ("internal error: master ssh process exited but ".
+				 "there is no associated ssh object to the host");
+	}
+	else {
+	    carp "espourios child exit (pid: $pid)";
+	}
     }
 }
 
@@ -532,8 +558,18 @@ sub _wait_for_jobs {
     }
 }
 
+sub _clean_errors {
+    my $self = shift;
+    for my $host (values %{$self->{hosts}}) {
+	delete $host->{error};
+    }
+}
+
 sub run {
     my ($self, $time) = @_;
+
+    $self->_clean_errors;
+
     my $hosts = $self->{hosts};
     my $max_workers = $self->{max_workers};
     my ($connecting, $ready, $running, $waiting, $suspended, $join_failed, $done) =
