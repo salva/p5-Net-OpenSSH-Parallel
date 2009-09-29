@@ -41,11 +41,12 @@ sub new {
 			      running => {},
 			      done => {},
 			      waiting => {},
-			      error => {},
 			      suspended => {},
+			      join_failed => {},
 			     },
 		 connected => { suspended => {},
 				waiting => {},
+				join_failed => {},
 			      },
 		 joins => {},
 		 debug => $debug || 0,
@@ -79,12 +80,15 @@ sub add_host {
     my %opts = (@_ & 1 ? (host => @_) : @_);
     $opts{host} = $label unless defined $opts{host};
 
+    my $on_error = delete $opts{on_error};
+
     my $host = { label => $label,
 		 workers => 1,
 		 opts => \%opts,
 		 ssh => undef,
 		 state => 'done',
-		 queue => []
+		 queue => [],
+		 on_error => $on_error,
 	       };
 
     $self->{hosts}{$label} = $host;
@@ -100,13 +104,15 @@ sub _set_host_state {
     delete $self->{in_state}{$old}{$label}
 	or die "internal error: host $label is in state $old but not in such queue";
     delete $self->{connected}{$old}{$label}
-	if ($old eq 'suspended' or $old eq 'waiting');
+	if ($old eq 'suspended' or $old eq 'waiting' or $old eq 'join_failed');
 
     $self->{in_state}{$state}{$label} = 1;
     $host->{state} = $state;
     $self->_debug(state => "[$label] state changed $old --> $state");
 
-    if ($host->{ssh} and ($state eq 'suspended' or $state eq 'waiting')) {
+    if ($host->{ssh} and ($state eq 'suspended' or
+			  $state eq 'waiting' or
+			  $state eq 'join_failed')) {
 	$self->{connected}{$state}{$label} = 1;
 	$self->_debug(state => "[$label] host is connected");
     }
@@ -217,6 +223,8 @@ sub _at_error {
     my ($self, $label, $error) = @_;
     my $host = $self->{hosts}{$label};
     my $task = delete $host->{current_task};
+
+    $self->_debug(at => '_at_error label:', $label, ', error:', $error);
 
     my $on_error;
     if ($error == OSSH_MASTER_FAILED and
@@ -354,7 +362,7 @@ sub _disconnect_any_host {
     $self->_debug(conns => "disconnect any host");
     # $self->_audit_conns;
     my $label;
-    for my $state (qw(suspended waiting)) {
+    for my $state (qw(suspended join_failed waiting)) {
 	# use Data::Dumper;
 	# print Dumper $connected;
 	$self->_debug(conns => "looking for connected host in state $state");
@@ -528,10 +536,9 @@ sub run {
     my ($self, $time) = @_;
     my $hosts = $self->{hosts};
     my $max_workers = $self->{max_workers};
-    my ($connecting, $ready, $running, $waiting, $suspended, $done) =
-	@{$self->{in_state}}{qw(connecting ready running waiting suspended done)};
-    my ($connected_waiting, $connected_suspended) =
-	@{$self->{connected}}{qw(waiting suspended)};
+    my ($connecting, $ready, $running, $waiting, $suspended, $join_failed, $done) =
+	@{$self->{in_state}}{qw(connecting ready running waiting suspended join_failed done)};
+    my $connected_suspended = $self->{connected}{suspended};
     while (1) {
 	# use Data::Dumper;
 	# print STDERR Dumper $self;
@@ -545,6 +552,9 @@ sub run {
 	# $self->_audit_conns;
 	$self->_at_ready($_) for keys %$ready;
 	# $self->_audit_conns;
+
+	$self->_debug(at => 'run: hosts at join_failed: ', scalar(keys %$join_failed));
+	$self->_at_error($_, OSSH_JOIN_FAILED) for keys %$join_failed;
 
 	if ($max_workers) {
 	    $self->_debug(at => "run: hosts at suspended:", scalar(keys %$suspended));

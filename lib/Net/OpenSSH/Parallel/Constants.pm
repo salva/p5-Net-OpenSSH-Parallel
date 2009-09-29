@@ -12,23 +12,26 @@ require Exporter;
 our @ISA = qw(Exporter);
 
 our %EXPORT_TAGS = %Net::OpenSSH::Constants::EXPORT_TAGS;
+$EXPORT_TAGS{error} = [@{$EXPORT_TAGS{error}}];
 delete $EXPORT_TAGS{all};
 
-my %on_error = ( OSSH_ON_ERROR_IGNORE => 201,
-		 OSSH_ON_ERROR_DONE => 202,
-		 OSSH_ON_ERROR_ABORT => 203,
-		 OSSH_ON_ERROR_ABORT_ALL => 204,
-		 OSSH_ON_ERROR_RETRY => 205 );
+our %error = ( OSSH_JOIN_FAILED => 100,
+	       OSSH_ABORTED => 101 );
 
-for my $key (keys %on_error) {
+our %on_error = ( OSSH_ON_ERROR_IGNORE => 201,
+		  OSSH_ON_ERROR_DONE => 202,
+		  OSSH_ON_ERROR_ABORT => 203,
+		  OSSH_ON_ERROR_ABORT_ALL => 204,
+		  OSSH_ON_ERROR_RETRY => 205 );
+
+for my $hash (qw(error on_error)) {
     no strict 'refs';
-    my $value = $on_error{$key};
-    *{$key} = sub () { $value };
-    push @{$EXPORT_TAGS{on_error}}, $key
+    for my $key (keys %$hash) {
+	my $value = $hash->{$key};
+	*{$key} = sub () { $value };
+	push @{$EXPORT_TAGS{$hash}}, $key
+    }
 }
-
-use constant OSSH_JOIN_FAILED => 100;
-$EXPORT_TAGS{error} = [ @{$EXPORT_TAGS{error}}, 'OSSH_JOIN_FAILED' ];
 
 our @EXPORT_OK = map { @{$EXPORT_TAGS{$_}} } keys %EXPORT_TAGS;
 $EXPORT_TAGS{all} = [@EXPORT_OK];
@@ -58,6 +61,7 @@ Besides the error codes defined in Net::OpenSSH this module also
 defines:
 
   OSSH_JOIN_FAILED
+  OSSH_ABORTED
 
 =item :on_error
 
