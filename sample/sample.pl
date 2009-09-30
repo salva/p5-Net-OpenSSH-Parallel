@@ -5,13 +5,17 @@ use warnings;
 
 use Net::OpenSSH::Parallel;
 use Net::OpenSSH::Parallel::Constants qw(:all);
-$Net::OpenSSH::debug = -1;
+# $Net::OpenSSH::debug = -1;
 
 my $hosts = 4;
 
-my $osp = Net::OpenSSH::Parallel->new(workers => 5, connections => 5, debug => -1); #1|128|256);
+my $osp = Net::OpenSSH::Parallel->new(workers => 20, connections => 40, debug => 512); #1|128|256);
 $osp->add_host("host-$_", "localhost") for 1..$hosts;
-$osp->add_host("foo", "foo", on_error => OSSH_ON_ERROR_ABORT);
+$osp->add_host("foo", "foo", on_error => OSSH_ON_ERROR_IGNORE);
+$osp->add_host("bar", "bar", on_error => OSSH_ON_ERROR_DONE);
+$osp->add_host("boletus-$_", 'root@172.20.8.208') for 1..6;
+$osp->add_host("ubuntu-$_", "172.20.8.191") for 1..3;
+
 $osp->push('*', cmd => 'echo %LABEL% starting');
 
 # for (1..10*$hosts) {

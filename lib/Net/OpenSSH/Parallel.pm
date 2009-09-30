@@ -11,6 +11,7 @@ use Net::OpenSSH::Parallel::Constants qw(:error :on_error);
 
 use POSIX qw(WNOHANG);
 use Time::HiRes qw(time);
+use Scalar::Util qw(dualvar);
 
 sub new {
     my ($class, %opts) = @_;
@@ -70,7 +71,7 @@ sub _debug {
     my $bit = $debug_channel{$channel}
 	or die "internal error: bad debug channel $channel";
     if ($self->{debug} & $debug_channel{$channel}) {
-	print STDERR sprintf("%6.3f", (time - $^T)), "| ", join('', @_), "\n";
+	print STDERR sprintf("%6.3f", (time - $^T)), "| ", join('', map { defined($_) ? $_ : '<undef>' } @_), "\n";
     }
 }
 
@@ -225,7 +226,7 @@ sub _at_error {
     my $host = $self->{hosts}{$label};
     my $task = delete $host->{current_task};
 
-    $self->_debug(at => '_at_error label:', $label, ', error:', $error);
+    $self->_debug(error => "_at_error label: $label, error: $error");
 
     my $on_error;
     if ($error == OSSH_MASTER_FAILED and
@@ -254,7 +255,7 @@ sub _at_error {
 	$on_error ||= OSSH_ON_ERROR_ABORT;
     }
 
-    $self->_debug(error => "[$label] on_error: $on_error");
+    $self->_debug(error => "[$label] on_error: $on_error, error: $error");
 
     my $queue = $host->{queue};
 
@@ -264,8 +265,10 @@ sub _at_error {
 	    # currently we remove the next task from the queue and
 	    # continue.
 	    shift @$queue;
-	    $self->_set_host_status($label, 'ready');
+	    $self->_set_host_state($label, 'suspended');
 	    $self->_disconnect_host($label);
+	    $self->_set_host_state($label, 'ready');
+	    $host->{retry_count}++;
 	}
     }
     elsif ($on_error == OSSH_ON_ERROR_DONE or
@@ -408,17 +411,8 @@ sub _at_ready {
     my $host = $self->{hosts}{$label};
     $self->_debug(at => "[$label] at_ready");
 
-    unless ($host->{ssh}) {
-	if (my $max_conns = $self->{max_conns}) {
-	    $self->_disconnect_any_host() if $self->{num_conns} >= $max_conns;
-	}
-	$self->_debug(at => "[$label] host is not connected, connecting...");
-	$self->_at_connect($label);
-	return;
-    }
-
     my $queue = $host->{queue};
-    while (my $task = shift @$queue) {
+    while (defined (my $task = shift @$queue)) {
 	my $action = shift @$task;
 	$self->_debug(at => "[$label] at_ready, starting new action $action");
 	if ($action eq 'join') {
@@ -440,13 +434,26 @@ sub _at_ready {
 	    next;
 	}
 	elsif ($action eq 'sub') {
-	    my (undef, $sub) = @$task;
+	    shift @$task;
+	    my $sub = shift @$task;
 	    $self->_debug(action => "[$label] calling sub $sub");
 	    $sub->($self, $label, @$task);
 	    next;
 	}
 	else {
-	    $host->{current_task} = [$action => @$task];
+	    unless ($host->{ssh}) {
+		# unshift the task we have just removed and connect first:
+		unshift @$task, $action;
+		unshift @$queue, $task;
+		if (my $max_conns = $self->{max_conns}) {
+		    $self->_disconnect_any_host() if $self->{num_conns} >= $max_conns;
+		}
+		$self->_debug(at => "[$label] host is not connected, connecting...");
+		$self->_at_connect($label);
+		return;
+	    }
+
+	    $host->{current_task} = [$action, @$task];
 	    my %opts = %{shift @$task};
 	    delete $opts{on_error};
 	    my $method = "_start_$action";
@@ -458,8 +465,8 @@ sub _at_ready {
 	    }
 	    $self->{host_by_pid}{$pid} = $label;
 	    $self->_set_host_state($label, 'running');
+	    return;
 	}
-	return;
     }
     $self->_debug(at => "[$label] at_ready, queue_is_empty, we are done!");
     $self->_set_host_state($label, 'done');
@@ -510,8 +517,9 @@ sub _finish_action {
 	$self->_debug(action => "[$label] action finished pid: $pid, rc: $?");
 	$self->_set_host_state($label, 'ready');
 	if ($?) {
+	    my $rc = ($? >> 8);
 	    $self->_at_error($label,
-			     dualvar(OSSH_SLAVE_FAILED, "child exited with non-zero return code"));
+			     dualvar(OSSH_SLAVE_FAILED, "child exited with non-zero return code ($rc)"));
 	}
     }
     else {
@@ -614,13 +622,20 @@ sub run {
 	$self->_debug(at => "run: hosts at running: ", scalar(keys %$running));
 	$self->_debug(at => "run: hosts at done: ", scalar(keys %$done), " of ", scalar(keys %$hosts));
 
-	return 1 if keys(%$hosts) == keys(%$done);
+	last if keys(%$hosts) == keys(%$done);
 
 	my $time = ( %$ready      ? 0   :
 		     %$connecting ? 0.1 :
 		                    3.0 );
 	$self->_wait_for_jobs($time);
     }
+
+    my $error;
+    for my $label (sort keys %$hosts) {
+	$hosts->{$label}{error} and $error = 1;
+	$self->_debug(error => "[$label] error: ", $hosts->{$label}{error});
+    }
+    !$error;
 }
 
 1;
