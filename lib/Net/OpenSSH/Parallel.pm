@@ -560,9 +560,7 @@ sub _wait_for_jobs {
 
 sub _clean_errors {
     my $self = shift;
-    for my $host (values %{$self->{hosts}}) {
-	delete $host->{error};
-    }
+    delete $_->{error} for values %{$self->{hosts}};
 }
 
 sub run {
