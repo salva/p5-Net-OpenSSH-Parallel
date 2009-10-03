@@ -510,7 +510,7 @@ sub _start_join {
     my $label = shift;
 }
 
-sub _finish_action {
+sub _finish_task {
     my ($self, $pid) = @_;
     my $label = delete $self->{host_by_pid}{$pid};
     if (defined $label) {
@@ -520,6 +520,9 @@ sub _finish_action {
 	    my $rc = ($? >> 8);
 	    $self->_at_error($label,
 			     dualvar(OSSH_SLAVE_FAILED, "child exited with non-zero return code ($rc)"));
+	}
+	else {
+	    delete $self->{hosts}{$label}{current_task};
 	}
     }
     else {
@@ -551,7 +554,7 @@ sub _wait_for_jobs {
 		last if $pid <= 0;
 		$self->_debug(action => "waitpid caught pid: $pid, rc: $?");
 		$dontwait = 1;
-		$self->_finish_action($pid);
+		$self->_finish_task($pid);
 	    }
 	}
 	$dontwait and return 1;
@@ -921,14 +924,14 @@ runs the queued operations.
 
 =over
 
-=item * implement better error handling
-
-now is an all or nothing approach, when something fails the full
-process is aborted.
-
 =item * run N processes per host concurrently
 
 allow running more than one process per remote server concurrently
+
+=item * delay before reconnect
+
+when connecting fails, do not try to reconnect inmediately but after
+some predefined period
 
 =back
 
