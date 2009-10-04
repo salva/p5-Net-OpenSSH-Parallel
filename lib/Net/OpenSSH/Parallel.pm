@@ -13,12 +13,13 @@ use POSIX qw(WNOHANG);
 use Time::HiRes qw(time);
 use Scalar::Util qw(dualvar);
 
+our $debug;
+
 sub new {
     my ($class, %opts) = @_;
-
-    my $debug = delete $opts{debug};
     my $max_workers = delete $opts{workers};
     my $max_conns = delete $opts{connections};
+    my $max_reconns = delete $opts{reconnections};
     my $on_error = delete $opts{on_error};
 
     if ($max_conns) {
@@ -51,10 +52,10 @@ sub new {
 				join_failed => {},
 			      },
 		 joins => {},
-		 debug => $debug || 0,
 		 max_workers => $max_workers,
 		 max_conns => $max_conns,
 		 num_conns => 0,
+		 max_reconns => $max_reconns,
 		 on_error => $on_error,
 	       };
     bless $self, $class;
@@ -66,12 +67,12 @@ my %debug_channel = (api => 1, state => 2, select => 4, at => 8,
 		     connect => 128, conns => 256, error => 512);
 
 sub _debug {
-    my $self = shift;
     my $channel = shift;
     my $bit = $debug_channel{$channel}
 	or die "internal error: bad debug channel $channel";
-    if ($self->{debug} & $debug_channel{$channel}) {
-	print STDERR sprintf("%6.3f", (time - $^T)), "| ", join('', map { defined($_) ? $_ : '<undef>' } @_), "\n";
+    if ($debug & $debug_channel{$channel}) {
+	print STDERR sprintf("%6.3f", (time - $^T)), "| ",
+	    join('', map { defined($_) ? $_ : '<undef>' } @_), "\n";
     }
 }
 
@@ -94,9 +95,9 @@ sub add_host {
 	       };
 
     $self->{hosts}{$label} = $host;
-    $self->_debug(api => "[$label] added ($host)");
+    $debug and _debug(api => "[$label] added ($host)");
     $self->{in_state}{done}{$label} = 1;
-    $self->_debug(state => "[$label] state set to done");
+    $debug and _debug(state => "[$label] state set to done");
 }
 
 sub _set_host_state {
@@ -110,13 +111,13 @@ sub _set_host_state {
 
     $self->{in_state}{$state}{$label} = 1;
     $host->{state} = $state;
-    $self->_debug(state => "[$label] state changed $old --> $state");
+    $debug and _debug(state => "[$label] state changed $old --> $state");
 
     if ($host->{ssh} and ($state eq 'suspended' or
 			  $state eq 'waiting' or
 			  $state eq 'join_failed')) {
 	$self->{connected}{$state}{$label} = 1;
-	$self->_debug(state => "[$label] host is connected");
+	$debug and _debug(state => "[$label] host is connected");
     }
 }
 
@@ -140,7 +141,7 @@ sub _select_labels {
 	$sel{$_} = 1 for grep $_ =~ $re, keys %{$self->{hosts}};
     }
     my @labels = keys %sel;
-    $self->_debug(select => "selector($selector) --> [", join(', ', @labels), "]");
+    $debug and _debug(select => "selector($selector) --> [", join(', ', @labels), "]");
     return @labels;
 }
 
@@ -189,14 +190,14 @@ sub push {
 	for my $label (@labels) {
 	    my $host = $self->{hosts}{$label};
 	    push @{$host->{queue}}, [$action, {}, $join];
-	    $self->_debug(api => "[$label] join $join->{id} queued");
+	    $debug and _debug(api => "[$label] join $join->{id} queued");
 	}
     }
     else {
 	for my $label (@labels) {
 	    my $host = $self->{hosts}{$label};
 	    push @{$host->{queue}}, [$action, \%opts, @_];
-	    $self->_debug(api => "[$label] action $action queued");
+	    $debug and _debug(api => "[$label] action $action queued");
 	    $self->_set_host_state($label, 'ready')
 		if $in_state->{done}{$label};
 	}
@@ -209,7 +210,7 @@ sub _audit_conns {
     my $hosts = $self->{hosts};
     my $num = 0;
     $num++ for grep $_->{ssh}, values %$hosts;
-    $self->_debug(conns => "audit_conns counted: $num, saved: $self->{num_conns}");
+    $debug and _debug(conns => "audit_conns counted: $num, saved: $self->{num_conns}");
     $num == $self->{num_conns}
 	or die "internal error: wrong number of connections, counted: $num, saved: $self->{num_conns}";
     my $in_state = $self->{in_state};
@@ -221,46 +222,73 @@ sub _audit_conns {
     }
 }
 
+sub _hash_chain_get {
+    my $name = shift;
+    for (@_) {
+	if (defined $_) {
+	    my $v = $_->{$name};
+	    return $v if defined $v;
+	}
+    }
+    undef;
+}
+
 sub _at_error {
     my ($self, $label, $error) = @_;
     my $host = $self->{hosts}{$label};
     my $task = delete $host->{current_task};
 
-    $self->_debug(error => "_at_error label: $label, error: $error");
+    $debug and _debug(error => "_at_error label: $label, error: $error");
+
+    my $opts;
+    $opts = $task->[1] if $task;
 
     my $on_error;
-    if ($error == OSSH_MASTER_FAILED and
-	$host->{state} ne 'connecting') {
-	# it seems we have just lost the connection to the
-	# remote host, retry unconditionally!
-	$on_error = OSSH_ON_ERROR_RETRY
-    }
-    else {
-	$on_error = $task->[1]{on_error} if $task;
-	$on_error ||= $host->{on_error};
-	$on_error ||= $self->{on_error};
-
-	if (ref $on_error eq 'CODE') {
-	    if ($error == OSSH_JOIN_FAILED) {
-		$on_error = $on_error->($self, $label, $error);
-	    }
-	    else {
-		$on_error = $on_error->($self, $label, $error, $task);
-	    }
+    if ($error == OSSH_MASTER_FAILED) {
+	my $max_reconns = _hash_chain_get(max_reconns => $opts, $host, $self) || 0;
+	my $reconns = $host->{current_task_reconns}++ || 0;
+	$debug and _debug(error => "[$label] reconnection: $reconns, max: $max_reconns");
+	if ($reconns < $max_reconns) {
+	    $debug and _debug(error => "[$label] will reconnect!");
+	    $on_error = OSSH_ON_ERROR_RETRY;
 	}
+    }
+    $on_error ||= _hash_chain_get(on_error => $opts, $host, $self);
 
-	$on_error = $on_error->($self, $label, $error, $task)
-	    if ref $on_error eq 'CODE';
-
-	$on_error ||= OSSH_ON_ERROR_ABORT;
+    if (ref $on_error eq 'CODE') {
+	if ($error == OSSH_JOIN_FAILED) {
+	    $on_error = $on_error->($self, $label, $error);
+	}
+	else {
+	    $on_error = $on_error->($self, $label, $error, $task);
+	}
     }
 
-    $self->_debug(error => "[$label] on_error: $on_error, error: $error");
+    $on_error ||= OSSH_ON_ERROR_ABORT;
+
+    $debug and _debug(error => "[$label] on_error (final): $on_error, error: $error (".($error+0).")");
 
     my $queue = $host->{queue};
 
-    if ($on_error == OSSH_ON_ERROR_IGNORE) {
+    if ($on_error == OSSH_ON_ERROR_RETRY) {
 	if ($error == OSSH_MASTER_FAILED) {
+	    $self->_set_host_state($label, 'suspended');
+	    $self->_disconnect_host($label);
+	    $self->_set_host_state($label, 'ready');
+	}
+	else {
+	    unshift @$queue, $task;
+	}
+	return;
+    }
+
+    delete $host->{current_task_reconns};
+ 
+    if ($on_error == OSSH_ON_ERROR_IGNORE) {
+	if ($error == OSSH_JOIN_FAILED) {
+	    $self->_set_host_state($label, 'ready');
+	}
+	elsif ($error == OSSH_MASTER_FAILED) {
 	    # stablishing a new connection failed, what we should do?
 	    # currently we remove the next task from the queue and
 	    # continue.
@@ -268,31 +296,28 @@ sub _at_error {
 	    $self->_set_host_state($label, 'suspended');
 	    $self->_disconnect_host($label);
 	    $self->_set_host_state($label, 'ready');
-	    $host->{retry_count}++;
 	}
+	# else do nothing
     }
     elsif ($on_error == OSSH_ON_ERROR_DONE or
 	   $on_error == OSSH_ON_ERROR_ABORT or
 	   $on_error == OSSH_ON_ERROR_ABORT_ALL) {
 	my $queue = $host->{queue};
 	my $failed = ($on_error != OSSH_ON_ERROR_DONE);
-	$self->_debug(error => "[$label] dropping queue, ", scalar(@$queue), " jobs");
+	$debug and _debug(error => "[$label] dropping queue, ", scalar(@$queue), " jobs");
 	while (my $task = shift @$queue) {
 	    my ($action, undef, $join) = @$task;
-	    $self->_debug(error => "[$label] remove action $action from queue");
+	    $debug and _debug(error => "[$label] remove action $action from queue");
 	    $self->_join_notify($label, $join, $failed)
 		if $action eq '_notify';
 	}
-
-	$on_error == OSSH_ON_ERROR_ABORT_ALL
-	    and $self->{abort_all} = 1;
-
+	
+ 	$on_error == OSSH_ON_ERROR_ABORT_ALL
+ 	    and $self->{abort_all} = 1;
+ 	
 	$self->_set_host_state($label, 'done');
 	$self->_disconnect_host($label);
 	$host->{error} = $error;
-    }
-    elsif ($on_error == OSSH_ON_ERROR_RETRY) {
-	unshift @$queue, $task;
     }
     else {
 	die "unknown on_error code $on_error"
@@ -302,7 +327,7 @@ sub _at_error {
 sub _at_connect {
     my ($self, $label) = @_;
     my $host = $self->{hosts}{$label};
-    $self->_debug(connect => "[$label] _connect, starting SSH connection");
+    $debug and _debug(connect => "[$label] _connect, starting SSH connection");
     $host->{ssh} and die "internal error: connecting host is already connected";
     my $ssh = $host->{ssh} = Net::OpenSSH->new(expand_vars => 1,
 					       %{$host->{opts}},
@@ -321,10 +346,10 @@ sub _at_connect {
 sub _at_connecting {
     my ($self, $label) = @_;
     my $host = $self->{hosts}{$label};
-    $self->_debug(at => "[$label] at_connecting, waiting for master");
+    $debug and _debug(at => "[$label] at_connecting, waiting for master");
     my $ssh = $host->{ssh};
     if ($ssh->wait_for_master(1)) {
-	$self->_debug(at => "[$label] at_connecting, master connected");
+	$debug and _debug(at => "[$label] at_connecting, master connected");
 	$self->_set_host_state($label, 'ready');
     }
     elsif ($ssh->error) {
@@ -338,14 +363,14 @@ sub _join_notify {
     # print STDERR Dumper $join;
     delete $join->{depends}{$label}
 	or die "internal error: $join->{id} notified for non dependent label $label";
-    $self->_debug(join => "removing dependent $label from join $join->{id}");
+    $debug and _debug(join => "removing dependent $label from join $join->{id}");
     $join->{failed} = 1 if $failed;
     if (not %{$join->{depends}}) {
-	$self->_debug(join => "join $join->{id} done");
+	$debug and _debug(join => "join $join->{id} done");
 	$join->{done} = 1;
 	my $failed = $join->{failed};
 	for my $label (@{$join->{notify}}) {
-	    $self->_debug(join => "notifying $label about join $join->{id} done");
+	    $debug and _debug(join => "notifying $label about join $join->{id} done");
 	    $self->_set_host_state($label, $failed ? 'join_failed' : 'ready');
 	}
     }
@@ -366,7 +391,7 @@ sub _disconnect_host {
     $state =~ /^(?:waiting|suspended|done|connecting)$/
 	or die "internal error: disconnecting $label in state $state";
     if ($host->{ssh}) {
-	$self->_debug(connect => "[$label] disconnecting host");
+	$debug and _debug(connect => "[$label] disconnecting host");
 	my $master_pid = delete $host->{master_pid};
 	delete $self->{ssh_master_by_pid}{$master_pid}
 	    if defined $master_pid;
@@ -379,18 +404,18 @@ sub _disconnect_host {
 sub _disconnect_any_host {
     my $self = shift;
     my $connected = $self->{connected};
-    $self->_debug(conns => "disconnect any host");
+    $debug and _debug(conns => "disconnect any host");
     # $self->_audit_conns;
     my $label;
     for my $state (qw(suspended join_failed waiting)) {
 	# use Data::Dumper;
 	# print Dumper $connected;
-	$self->_debug(conns => "looking for connected host in state $state");
+	$debug and _debug(conns => "looking for connected host in state $state");
 	($label) = each %{$connected->{$state}};
 	keys %{$connected->{$state}}; # reset iterator
 	last if defined $label;
     }
-    $self->_debug(conns => "[$label] disconnecting");
+    $debug and _debug(conns => "[$label] disconnecting");
     defined $label or die "internal error: unable to disconnect any host";
     $self->_disconnect_host($label);
 }
@@ -400,21 +425,21 @@ sub _at_ready {
     if (my $max_workers = $self->{max_workers}) {
 	my $in_state = $self->{in_state};
 	my $num_workers = $self->_num_workers;
-	$self->_debug(workers => "num workers: $num_workers, maximun: $max_workers");
+	$debug and _debug(workers => "num workers: $num_workers, maximun: $max_workers");
 	if ($num_workers > $max_workers) {
-	    $self->_debug(workers => "[$label] suspending");
+	    $debug and _debug(workers => "[$label] suspending");
 	    $self->_set_host_state($label, 'suspended');
 	    return;
 	}
     }
 
     my $host = $self->{hosts}{$label};
-    $self->_debug(at => "[$label] at_ready");
+    $debug and _debug(at => "[$label] at_ready");
 
     my $queue = $host->{queue};
     while (defined (my $task = shift @$queue)) {
 	my $action = shift @$task;
-	$self->_debug(at => "[$label] at_ready, starting new action $action");
+	$debug and _debug(at => "[$label] at_ready, starting new action $action");
 	if ($action eq 'join') {
 	    my (undef, $join) = @$task;
 	    if ($join->{done}) {
@@ -422,7 +447,7 @@ sub _at_ready {
 		    $self->_at_error($label, OSSH_JOIN_FAILED);
 		    return;
 		}
-		$self->_debug(action => "[$label] join $join->{id} already done");
+		$debug and _debug(action => "[$label] join $join->{id} already done");
 		next;
 	    }
 	    CORE::push @{$join->{notify}}, $label;
@@ -436,20 +461,26 @@ sub _at_ready {
 	elsif ($action eq 'sub') {
 	    shift @$task;
 	    my $sub = shift @$task;
-	    $self->_debug(action => "[$label] calling sub $sub");
+	    $debug and _debug(action => "[$label] calling sub $sub");
 	    $sub->($self, $label, @$task);
 	    next;
 	}
 	else {
-	    unless ($host->{ssh}) {
+	    my $ssh = $host->{ssh};
+	    unless ($ssh) {
 		# unshift the task we have just removed and connect first:
 		unshift @$task, $action;
 		unshift @$queue, $task;
 		if (my $max_conns = $self->{max_conns}) {
 		    $self->_disconnect_any_host() if $self->{num_conns} >= $max_conns;
 		}
-		$self->_debug(at => "[$label] host is not connected, connecting...");
+		$debug and _debug(at => "[$label] host is not connected, connecting...");
 		$self->_at_connect($label);
+		return;
+	    }
+
+	    if (my $error = $ssh->error) {
+		$self->_at_error($label, $error);
 		return;
 	    }
 
@@ -458,7 +489,7 @@ sub _at_ready {
 	    delete $opts{on_error};
 	    my $method = "_start_$action";
 	    my $pid = $self->$method($label, @$task);
-	    $self->_debug(action => "[$label] action pid: ", $pid);
+	    $debug and _debug(action => "[$label] action pid: ", $pid);
 	    unless (defined $pid) {
 		$self->_at_error($label, $host->{ssh}->error || OSSH_SLAVE_FAILED);
 		return;
@@ -468,7 +499,7 @@ sub _at_ready {
 	    return;
 	}
     }
-    $self->_debug(at => "[$label] at_ready, queue_is_empty, we are done!");
+    $debug and _debug(at => "[$label] at_ready, queue_is_empty, we are done!");
     $self->_set_host_state($label, 'done');
     $self->_disconnect_host($label);
 }
@@ -479,7 +510,7 @@ sub _start_command {
     my $opts = shift;
     my $host = $self->{hosts}{$label};
     my $ssh = $host->{ssh};
-    $self->_debug(action => "[$label] start command action [@_]");
+    $debug and _debug(action => "[$label] start command action [@_]");
     $ssh->spawn($opts, @_);
 }
 
@@ -489,7 +520,7 @@ sub _start_scp_get {
     my $opts = shift;
     my $host = $self->{hosts}{$label};
     my $ssh = $host->{ssh}; 
-    $self->_debug(action => "[$label] start scp_get action");
+    $debug and _debug(action => "[$label] start scp_get action");
     $opts->{async} = 1;
     $ssh->scp_get($opts, @_);
 }
@@ -500,7 +531,7 @@ sub _start_scp_put {
     my $opts = shift;
     my $host = $self->{hosts}{$label};
     my $ssh = $host->{ssh};
-    $self->_debug(action => "[$label] start scp_put action");
+    $debug and _debug(action => "[$label] start scp_put action");
     $opts->{async} = 1;
     $ssh->scp_put($opts, @_);
 }
@@ -514,24 +545,35 @@ sub _finish_task {
     my ($self, $pid) = @_;
     my $label = delete $self->{host_by_pid}{$pid};
     if (defined $label) {
-	$self->_debug(action => "[$label] action finished pid: $pid, rc: $?");
-	$self->_set_host_state($label, 'ready');
+	$debug and _debug(action => "[$label] action finished pid: $pid, rc: $?");
+	my $host = $self->{hosts}{$label};
+	my $ssh = $host->{ssh} or die "internal error: $label is not connected";
 	if ($?) {
 	    my $rc = ($? >> 8);
-	    $self->_at_error($label,
-			     dualvar(OSSH_SLAVE_FAILED, "child exited with non-zero return code ($rc)"));
+	    my $error = $ssh->error;
+	    if (!$error or $rc < 255) {
+		$error = dualvar(OSSH_SLAVE_FAILED,
+				 "child exited with non-zero return code ($rc)")
+	    }
+	    $self->_at_error($label, $error);
 	}
 	else {
-	    delete $self->{hosts}{$label}{current_task};
+	    $self->_set_host_state($label, 'ready');
+	    delete $host->{current_task};
+	    delete $host->{current_task_reconns};
 	}
     }
     else {
 	my $label = delete $self->{ssh_master_by_pid}{$pid};
 	if (defined $label) {
-	    $self->_debug(action => "[$label] master ssh exited");
-	    my $ssh = $self->{hosts}{$label}{ssh};
-	    defined $ssh or die ("internal error: master ssh process exited but ".
-				 "there is no associated ssh object to the host");
+	    $debug and _debug(action => "[$label] master ssh exited");
+	    my $host = $self->{hosts}{$label};
+	    my $ssh = $host->{ssh}
+		or die ("internal error: master ssh process exited but ".
+			"there is no ssh object associated to host $label");
+	    $ssh->master_exited;
+	    my $state = $host->{state};
+	    # do error handler later...
 	}
 	else {
 	    carp "espourios child exit (pid: $pid)";
@@ -542,23 +584,23 @@ sub _finish_task {
 sub _wait_for_jobs {
     my ($self, $time) = @_;
     my $dontwait = ($time == 0);
-    $self->_debug(at => "_wait_for_jobs time: $time");
+    $debug and _debug(at => "_wait_for_jobs time: $time");
     # This loop is here because we want to call waitpit before and
     # after the select. If we find some child has exited in the first
     # round we don't call select at all and return immediately
     while (1) {
 	if (%{$self->{in_state}{running}}) {
-	    $self->_debug(at => "_wait_for_jobs reaping children");
+	    $debug and _debug(at => "_wait_for_jobs reaping children");
 	    while (1) {
 		my $pid = waitpid(-1, WNOHANG);
 		last if $pid <= 0;
-		$self->_debug(action => "waitpid caught pid: $pid, rc: $?");
+		$debug and _debug(action => "waitpid caught pid: $pid, rc: $?");
 		$dontwait = 1;
 		$self->_finish_task($pid);
 	    }
 	}
 	$dontwait and return 1;
-	$self->_debug(at => "_wait_for_jobs calling select");
+	$debug and _debug(at => "_wait_for_jobs calling select");
 	{
 	    # This is a hack to make select finish as soon as we get a
 	    # CHLD signal.
@@ -587,22 +629,22 @@ sub run {
     while (1) {
 	# use Data::Dumper;
 	# print STDERR Dumper $self;
-	$self->_debug(api => "run: iterating...");
+	$debug and _debug(api => "run: iterating...");
 
-	$self->_debug(at => "run: hosts at connecting: ", scalar(keys %$connecting));
+	$debug and _debug(at => "run: hosts at connecting: ", scalar(keys %$connecting));
 	$self->_at_connecting($_) for keys %$connecting;
 
-	$self->_debug(at => "run: hosts at ready: ", scalar(keys %$ready));
+	$debug and _debug(at => "run: hosts at ready: ", scalar(keys %$ready));
 
 	# $self->_audit_conns;
 	$self->_at_ready($_) for keys %$ready;
 	# $self->_audit_conns;
 
-	$self->_debug(at => 'run: hosts at join_failed: ', scalar(keys %$join_failed));
+	$debug and _debug(at => 'run: hosts at join_failed: ', scalar(keys %$join_failed));
 	$self->_at_error($_, OSSH_JOIN_FAILED) for keys %$join_failed;
 
 	if ($max_workers) {
-	    $self->_debug(at => "run: hosts at suspended:", scalar(keys %$suspended));
+	    $debug and _debug(at => "run: hosts at suspended:", scalar(keys %$suspended));
 	    if (%$suspended) {
 		my $awake = $max_workers - $self->_num_workers;
 		my @labels;
@@ -613,7 +655,7 @@ sub run {
 			$awake--;
 		    }
 		    for my $label (@labels) {
-			$self->_debug(workers => "[$label] awaking");
+			$debug and _debug(workers => "[$label] awaking");
 			$self->_set_host_state($label, 'ready');
 		    }
 		    keys %$hash; # do we really need to reset the each iterator?
@@ -621,22 +663,22 @@ sub run {
 	    }
 	}
 
-	$self->_debug(at => "run: hosts at waiting: ", scalar(keys %$waiting));
-	$self->_debug(at => "run: hosts at running: ", scalar(keys %$running));
-	$self->_debug(at => "run: hosts at done: ", scalar(keys %$done), " of ", scalar(keys %$hosts));
+	$debug and _debug(at => "run: hosts at waiting: ", scalar(keys %$waiting));
+	$debug and _debug(at => "run: hosts at running: ", scalar(keys %$running));
+	$debug and _debug(at => "run: hosts at done: ", scalar(keys %$done), " of ", scalar(keys %$hosts));
 
 	last if keys(%$hosts) == keys(%$done);
 
 	my $time = ( %$ready      ? 0   :
-		     %$connecting ? 0.1 :
-		                    3.0 );
+		     %$connecting ? 0.3 :
+		                    5.0 );
 	$self->_wait_for_jobs($time);
     }
 
     my $error;
     for my $label (sort keys %$hosts) {
 	$hosts->{$label}{error} and $error = 1;
-	$self->_debug(error => "[$label] error: ", $hosts->{$label}{error});
+	$debug and _debug(error => "[$label] error: ", $hosts->{$label}{error});
     }
     !$error;
 }
@@ -835,9 +877,13 @@ simultaneously.
 
 $maximum_connections must be equal or bigger than $maximum_workers
 
-=item debug => $debug
+=item reconnections => $maximum_reconnections
 
-select the level of debugging you want (0 => nothing, ~0 => maximum).
+when connecting to some host fails, this argument tells the module the
+maximum number of additional connection atemps that it should perform
+before giving up.
+
+The default value is zero.
 
 =back
 
@@ -943,8 +989,27 @@ expected!!!
 If you find any report it via L<http://rt.cpan.org> or by email (to
 sfandino@yahoo.com), please. Feedback and comments are also welcome!
 
+In order to report a bug, try to write a minima program that triggers
+it, then run it ater adding the following line at the regaining:
+
+  $Net::OpenSSH::Parallel::debug = -1;
+
+Then, send me (via rt or email) the generated debugging output, the
+source code of the script, a description of what is going wrong an
+also detail your OS and the versions of Perl, C<Net::OpenSSH> and
+C<Net::OpenSSH::Parallel> you are using.
+
+=head1 DEVELOPMENT VERSION
+
 The source code for this module is hosted at GitHub:
 L<http://github.com/salva/p5-Net-OpenSSH-Parallel>
+
+=head1 COMERCIAL SUPPORT
+
+Commercial support, professional services and custom software
+development around this module are available through my current
+company. Drop me an email with a rough description of your
+requirements and we will get back to you ASAP.
 
 =head1 SEE ALSO
 
