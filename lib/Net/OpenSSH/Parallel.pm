@@ -84,6 +84,7 @@ sub add_host {
     $opts{host} = $label unless defined $opts{host};
 
     my $on_error = delete $opts{on_error};
+    my $max_reconns = delete $opts{reconnections};
 
     my $host = { label => $label,
 		 workers => 1,
@@ -92,6 +93,7 @@ sub add_host {
 		 state => 'done',
 		 queue => [],
 		 on_error => $on_error,
+		 max_reconns => $max_reconns,
 	       };
 
     $self->{hosts}{$label} = $host;
@@ -245,7 +247,7 @@ sub _at_error {
 
     my $on_error;
     if ($error == OSSH_MASTER_FAILED) {
-	my $max_reconns = _hash_chain_get(max_reconns => $opts, $host, $self) || 0;
+	my $max_reconns = _hash_chain_get(max_reconns => $host, $self) || 0;
 	my $reconns = $host->{current_task_reconns}++ || 0;
 	$debug and _debug(error => "[$label] reconnection: $reconns, max: $max_reconns");
 	if ($reconns < $max_reconns) {
@@ -851,6 +853,86 @@ local file names.
 
 The variables C<HOST>, C<USER>, C<PORT> and C<LABEL> are predefined.
 
+=head2 Error handling
+
+When something goes wrong (some host is unreachable, some connection
+dies, some command fails, etc.) the module can handle the error in
+several predefined ways as follows:
+
+=head3 Error policies
+
+To set the error handling police, L</new>, L</add_host> and L</push>
+methods support and optional C<on_error> argument that can take the
+following values (these constants are available from
+L<Net::OpenSSH::Parallel::Constants>):
+
+=over 4
+
+=item OSSH_ON_ERROR_IGNORE
+
+Ignores the error and continues executing tasks in the host queue as
+it had never happened.
+
+=item OSSH_ON_ERROR_ABORT
+
+Aborts the processing on the corresponding host. The error will be
+propagated to any other hosts joining it at later points.
+
+In other words, this police aborts the queued jobs for this host
+and any other that has a dependency on it.
+
+=item OSSH_ON_ERROR_DONE
+
+Similar to C<OSSH_ON_ERROR_ABORT> but will not propagate errors to
+other hosts via joins.
+
+=item OSSH_ON_ERROR_ABORT_ALL
+
+B<Not implemented yet!>
+
+Causes all the host to abort as soon as possible (and that usually
+means after they finish their currently running tasks).
+
+=item OSSH_ON_ERROR_REPEAT
+
+The module will try to perform the current task again and again until
+it successes. This police can lead to an infinite loop and so its
+direct usage is discouraged.
+
+=back
+
+The default policy is C<OSSH_ON_ERROR_ABORT>.
+
+=head3 Setting the policy dynamically
+
+When a code reference is used instead of the previous constants as the
+police, the given subroutine will be called on error conditions as
+follows:
+
+  $on_error->($pssh, $label, $error, $task)
+
+C<$pssh> is a reference to the C<Net::OpenSSH::Parallel> object,
+C<$label> is the label associated to the host where the error
+happened. C<$error> is the error type as defined in
+L<Net::OpenSSH::Parallel::Constants> and $task is a reference to the
+task that was being carried out.
+
+The return value of the subroutine must be one of the described
+constants and the corresponding policy will be followed afterwards.
+
+=head3 Retrying connection errors
+
+When the module fails when trying to open a new connection to a host
+or when an existing connection dies unexpectedly, the option
+C<max_reconnections> can be used to instruct the module to try to
+connect again until the given maximum is reached.
+
+C<max_reconnections> is accepted by both the L</new> and L</add_host>
+methods.
+
+Finally, note that the reconnections maximum is per queued task and
+not per host.
+
 =head2 API
 
 These are the methods supported by this class:
@@ -983,33 +1065,37 @@ some predefined period
 
 =head1 BUGS AND SUPPORT
 
-This is a very early release of the module, lots of bugs should be
-expected!!!
+This is a very, very, very early release of the module, lots of bugs
+should be expected!!!
 
-If you find any report it via L<http://rt.cpan.org> or by email (to
-sfandino@yahoo.com), please. Feedback and comments are also welcome!
+If you find any, report it via L<http://rt.cpan.org> or by email (to
+sfandino@yahoo.com), please.
 
-In order to report a bug, try to write a minima program that triggers
-it, then run it ater adding the following line at the regaining:
+Feedback and comments are also welcome!
+
+=head2 Reporting bugs
+
+In order to report a bug, write a minimal program that triggers
+it and place the following line at the beggining:
 
   $Net::OpenSSH::Parallel::debug = -1;
 
-Then, send me (via rt or email) the generated debugging output, the
-source code of the script, a description of what is going wrong an
-also detail your OS and the versions of Perl, C<Net::OpenSSH> and
-C<Net::OpenSSH::Parallel> you are using.
+Then, send me (via rt or email) the debugging output you get when you
+run it. Include also the source code of the script, a description of
+what is going wrong and the details of your OS and the versions of
+Perl, C<Net::OpenSSH> and C<Net::OpenSSH::Parallel> you are using.
 
-=head1 DEVELOPMENT VERSION
-
-The source code for this module is hosted at GitHub:
-L<http://github.com/salva/p5-Net-OpenSSH-Parallel>
-
-=head1 COMERCIAL SUPPORT
+=head2 Commercial support
 
 Commercial support, professional services and custom software
 development around this module are available through my current
 company. Drop me an email with a rough description of your
 requirements and we will get back to you ASAP.
+
+=head2 Development version
+
+The source code for this module is hosted at GitHub:
+L<http://github.com/salva/p5-Net-OpenSSH-Parallel>.
 
 =head1 SEE ALSO
 
