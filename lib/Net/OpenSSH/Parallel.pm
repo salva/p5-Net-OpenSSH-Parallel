@@ -924,10 +924,10 @@ constants and the corresponding policy will be followed afterwards.
 
 When the module fails when trying to open a new connection to a host
 or when an existing connection dies unexpectedly, the option
-C<max_reconnections> can be used to instruct the module to try to
+C<reconnections> can be used to instruct the module to try to
 connect again until the given maximum is reached.
 
-C<max_reconnections> is accepted by both the L</new> and L</add_host>
+C<reconnections> is accepted by both the L</new> and L</add_host>
 methods.
 
 Finally, note that the reconnections maximum is per queued task and
@@ -1020,13 +1020,11 @@ When given, the C<\%opts> argument can contain the following options:
 
 =over 4
 
-=item on_error => sub { }
-
-not implemented yet!
-
 =item on_error => $fail_mode
 
-not implemented yet!
+=item on_error => sub { }
+
+See L</Error handling>.
 
 =item timeout => $seconds
 
