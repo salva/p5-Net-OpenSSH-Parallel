@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use strict;
 use warnings;
@@ -1157,9 +1157,13 @@ simpler to use but rather more limited.
 L<GRID::Machine> allows to run perl code distributed in a cluster via
 SSH.
 
-If your application requires orchestating workflows more complex that
+If your application requires orchestating workflows more complex than
 those supported by L<Net::OpenSSH::Parallel>, you should probably
-consider some L<POE> based solution.
+consider some L<POE> based solution (check
+L<POE::Component::OpenSSH>).
+
+L<App::MrShell> is another module allowing to run the same command in
+several host in parallel.
 
 =head1 COPYRIGHT AND LICENSE
 
