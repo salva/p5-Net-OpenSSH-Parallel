@@ -686,6 +686,7 @@ sub run {
 }
 
 1;
+
 __END__
 
 =head1 NAME
@@ -719,12 +720,12 @@ Run this here, that there, etc.
   *** remain compatible with this one.
   ***
 
-C<Net::OpenSSH::Parallel> is a parallel scheduler that can run
-commands in a set of hosts through SSH in parallel.
+C<Net::OpenSSH::Parallel> is a scheduler that can run commands in
+parallel in a set of hosts through SSH. It tries to find a compromise
+between being simple to use, efficient and covering a good part of the
+problem space of parallel process execution via SSH.
 
-This module tries to find a compromise between being simple to use,
-efficient and covering a good part of the problem space of parallel
-process execution via SSH.
+Obviously, it is build on top of L<Net::OpenSSH>!
 
 Common usage of the module is as follows:
 
@@ -767,16 +768,16 @@ IP, listening in different ports; etc.)
 
 =head2 Selecting hosts
 
-Several of the methods of this module accept a selector string to
-determine which of the registered hosts should be affected by the
-operation.
+Several of the methods of this module (well, currently, just C<push>)
+accept a selector string to determine which of the registered hosts
+should be affected by the operation.
 
 For instance, in...
 
   $pssh->push('*', command => 'ls')
 
-the first argument is the selector. In this case C<*> means all the
-registered hosts.
+the first argument is the selector. The one used here, C<*>, selects
+all the registered hosts.
 
 Other possible selectors are:
 
@@ -841,23 +842,23 @@ unlimited.
 
 This module activates L<Net::OpenSSH> L<variable
 expansion|Net::OpenSSH/Variable expansion> by default. That way, it is
-possible to parametrice easily the actions executed on every host in
+possible to easily customize the actions executed on every host in
 base to some of its properties.
 
 For instance:
 
   $pssh->queue('*', scp_get => "/var/log/messages", "messages.%HOST%");
 
-copies the remote log files appending the origin host name to the
+copies the log files appending the name of the remote hosts to the
 local file names.
 
 The variables C<HOST>, C<USER>, C<PORT> and C<LABEL> are predefined.
 
 =head2 Error handling
 
-When something goes wrong (some host is unreachable, some connection
-dies, some command fails, etc.) the module can handle the error in
-several predefined ways as follows:
+When something goes wrong (for instance, some host is unreachable,
+some connection dies, some command fails, etc.) the module can handle
+the error in several predefined ways as follows:
 
 =head3 Error policies
 
@@ -876,7 +877,8 @@ it had never happened.
 =item OSSH_ON_ERROR_ABORT
 
 Aborts the processing on the corresponding host. The error will be
-propagated to any other hosts joining it at later points.
+propagated to other hosts joining it at any later point once the join
+is reached.
 
 In other words, this police aborts the queued jobs for this host
 and any other that has a dependency on it.
@@ -896,8 +898,9 @@ means after they finish their currently running tasks).
 =item OSSH_ON_ERROR_REPEAT
 
 The module will try to perform the current task again and again until
-it successes. This police can lead to an infinite loop and so its
-direct usage is discouraged.
+it succeeds. This police can lead to an infinite loop and so its
+direct usage is discouraged (but see the following point about setting
+the policy dinamically).
 
 =back
 
@@ -922,20 +925,24 @@ constants and the corresponding policy will be followed afterwards.
 
 =head3 Retrying connection errors
 
-When the module fails when trying to open a new connection to a host
-or when an existing connection dies unexpectedly, the option
-C<reconnections> can be used to instruct the module to try to
-connect again until the given maximum is reached.
+When the module fails when trying to stablish a new SSH connection or
+when an existing connection dies unexpectedly, the option
+C<reconnections> can be used to instruct the module to retry the
+connection until it succeds or the given maximun is reached.
 
 C<reconnections> is accepted by both the L</new> and L</add_host>
 methods.
 
-Finally, note that the reconnections maximum is per queued task and
-not per host.
+Example:
+
+  $pssh->add_host('foo', reconnections => 3);
+
+Note that the reconnections maximum is not per host but per queued
+task.
 
 =head2 API
 
-These are the methods supported by this class:
+These are the available methods:
 
 =over
 
@@ -950,12 +957,12 @@ The accepted options are:
 =item workers => $maximum_workers
 
 sets the maximum number of operations that can be carried out in
-parallel.
+parallel (see L</Local resource usage>).
 
 =item connections => $maximum_connections
 
 sets the maximum number of SSH connections that can be stablished
-simultaneously.
+simultaneously (see L</Local resource usage>).
 
 $maximum_connections must be equal or bigger than $maximum_workers
 
@@ -963,9 +970,13 @@ $maximum_connections must be equal or bigger than $maximum_workers
 
 when connecting to some host fails, this argument tells the module the
 maximum number of additional connection atemps that it should perform
-before giving up.
+before giving up. The default value is zero.
 
-The default value is zero.
+See also L</Retrying connection errors>.
+
+=item on_error => $policy
+
+Sets the error handling policy (see L</Error handling>).
 
 =back
 
@@ -980,8 +991,22 @@ C<$label> is the name used to refer to the registered host afterwards.
 When the hostname argument is ommited, the label is used also as the
 hostname.
 
-Currently, L<Net::OpenSSH::Parallel> does not consumes any option and
-the contents of C<%opts> are passed to L<Net::OpenSSH> constructor.
+The accepted options are:
+
+=over
+
+=item on_error => $policy
+
+Sets the error handling policy (see L</Error handling>).
+
+=item max_reconns => $maximum_reconnections
+
+See </Retrying connection errors>.
+
+=back
+
+Any additional option will be passed verbatim to the L<Net::OpenSSH>
+constructor later.
 
 =item $pssh->push($selector, $action, \%opts, @action_args)
 
@@ -1058,6 +1083,19 @@ allow running more than one process per remote server concurrently
 
 when connecting fails, do not try to reconnect inmediately but after
 some predefined period
+
+=item * rationalize debugging
+
+currently it is a mess
+
+=item * add loggin support
+
+log the operations performed in a given file
+
+=item * stdio redirection
+
+add support for better handling of the Net::OpenSSH stdio redirection
+facilities
 
 =back
 
