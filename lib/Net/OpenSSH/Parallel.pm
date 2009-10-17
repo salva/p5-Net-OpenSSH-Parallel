@@ -313,10 +313,10 @@ sub _at_error {
 	    $self->_join_notify($label, $join, $failed)
 		if $action eq '_notify';
 	}
-	
+
  	$on_error == OSSH_ON_ERROR_ABORT_ALL
  	    and $self->{abort_all} = 1;
- 	
+
 	$self->_set_host_state($label, 'done');
 	$self->_disconnect_host($label);
 	$host->{error} = $error;
@@ -683,6 +683,13 @@ sub run {
 	$debug and _debug(error => "[$label] error: ", $hosts->{$label}{error});
     }
     !$error;
+}
+
+sub get_error {
+    my ($self, $label) = @_;
+    my $host = $self->{hosts}{$label}
+	or croak "no such host $label has been added";
+    $host->{error}
 }
 
 1;
@@ -1067,7 +1074,13 @@ etc.).
 
 =item $pssh->run
 
-runs the queued operations.
+Runs the queued operations.
+
+It returns a true value on success and false otherwise.
+
+=item $pssh->get_error($label)
+
+Returns the last error associated to the host of the given label.
 
 =back
 
