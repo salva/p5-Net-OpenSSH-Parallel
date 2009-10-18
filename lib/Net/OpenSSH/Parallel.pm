@@ -727,7 +727,7 @@ Run this here, that there, etc.
   *** remain compatible with this one.
   ***
 
-C<Net::OpenSSH::Parallel> is a scheduler that can run commands in
+C<Net::OpenSSH::Parallel> is an scheduler that can run commands in
 parallel in a set of hosts through SSH. It tries to find a compromise
 between being simple to use, efficient and covering a good part of the
 problem space of parallel process execution via SSH.
@@ -762,7 +762,7 @@ everything!
 =head2 Labelling hosts
 
 Every host is identified by an unique label that is given when the
-host is registered into the parallel scheduller. Usually, the host
+host is registered into the parallel scheduler. Usually, the host
 name is used also as the label, but this is not required by the
 module.
 
@@ -915,9 +915,9 @@ The default policy is C<OSSH_ON_ERROR_ABORT>.
 
 =head3 Setting the policy dynamically
 
-When a code reference is used instead of the previous constants as the
-police, the given subroutine will be called on error conditions as
-follows:
+When a subroutine reference is used as the policy instead of the any of the
+constants previously described, the given subroutine will be called on
+error conditions as follows:
 
   $on_error->($pssh, $label, $error, $task)
 
@@ -928,11 +928,11 @@ L<Net::OpenSSH::Parallel::Constants> and $task is a reference to the
 task that was being carried out.
 
 The return value of the subroutine must be one of the described
-constants and the corresponding policy will be followed afterwards.
+constants and the corresponding policy will be applied.
 
 =head3 Retrying connection errors
 
-When the module fails when trying to stablish a new SSH connection or
+If the module fails when trying to stablish a new SSH connection or
 when an existing connection dies unexpectedly, the option
 C<reconnections> can be used to instruct the module to retry the
 connection until it succeds or the given maximun is reached.
@@ -1048,7 +1048,7 @@ Queues a call to a perl subroutine that will be executed locally.
 
 =back
 
-When given, the C<\%opts> argument can contain the following options:
+When given, C<%opts> can contain the following options:
 
 =over 4
 
@@ -1109,6 +1109,10 @@ log the operations performed in a given file
 
 add support for better handling of the Net::OpenSSH stdio redirection
 facilities
+
+=item * configurable valid return codes
+
+Non zero exit code is not always an error.
 
 =back
 
