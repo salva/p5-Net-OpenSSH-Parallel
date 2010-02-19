@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use strict;
 use warnings;
@@ -490,7 +490,7 @@ sub _at_ready {
 	    my %opts = %{shift @$task};
 	    delete $opts{on_error};
 	    my $method = "_start_$action";
-	    my $pid = $self->$method($label, @$task);
+	    my $pid = $self->$method($label, \%opts, @$task);
 	    $debug and _debug(action => "[$label] action pid: ", $pid);
 	    unless (defined $pid) {
 		$self->_at_error($label, $host->{ssh}->error || OSSH_SLAVE_FAILED);
@@ -1138,6 +1138,11 @@ run it. Include also the source code of the script, a description of
 what is going wrong and the details of your OS and the versions of
 Perl, C<Net::OpenSSH> and C<Net::OpenSSH::Parallel> you are using.
 
+=head2 Development version
+
+The source code for this module is hosted at GitHub:
+L<http://github.com/salva/p5-Net-OpenSSH-Parallel>.
+
 =head2 Commercial support
 
 Commercial support, professional services and custom software
@@ -1145,10 +1150,10 @@ development around this module are available through my current
 company. Drop me an email with a rough description of your
 requirements and we will get back to you ASAP.
 
-=head2 Development version
+=head2 My wishlist
 
-The source code for this module is hosted at GitHub:
-L<http://github.com/salva/p5-Net-OpenSSH-Parallel>.
+If you like this module and you're feeling generous, take a look at my
+Amazon Wish List: L<http://amzn.com/w/1WU1P6IR5QZ42>
 
 =head1 SEE ALSO
 
@@ -1171,7 +1176,7 @@ several host in parallel.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright E<copy> 2009 by Salvador FandiE<ntilde>o
+Copyright E<copy> 2009-2010 by Salvador FandiE<ntilde>o
 (sfandino@yahoo.com).
 
 This library is free software; you can redistribute it and/or modify
