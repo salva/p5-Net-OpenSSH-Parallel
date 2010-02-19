@@ -1,5 +1,8 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
+0.06 Feb 19, 2010
+      - CPAN upload for 0.05 failed leaving the package unavailable.
+
 0.05 Feb 19, 2010
       - command option passing to Net::OpenSSH was broken (bug report
         by Sawyer X).
