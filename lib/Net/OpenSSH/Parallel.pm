@@ -443,6 +443,7 @@ sub _at_ready {
 	if ($action eq 'join') {
 	    my (undef, $join) = @$task;
 	    if ($join->{done}) {
+		$debug and _debug(join => "join[$join->{id}] is done");
 		if ($join->{failed}) {
 		    $self->_at_error($label, OSSH_JOIN_FAILED);
 		    return;
@@ -452,6 +453,7 @@ sub _at_ready {
 	    }
 	    CORE::push @{$join->{notify}}, $label;
 	    $self->_set_host_state($label, 'waiting');
+	    return;
 	}
 	elsif ($action eq '_notify') {
 	    my (undef, $join) = @$task;
