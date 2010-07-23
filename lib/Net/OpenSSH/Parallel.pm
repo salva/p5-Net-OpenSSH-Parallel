@@ -172,13 +172,8 @@ sub push {
 
     my @labels = $self->_select_labels($selector);
 
-    if (keys %opts and
-	($action eq 'join' or
-	 $action eq 'sub')) {
-	croak "$action action does not accept options";
-    }
-
     if ($action eq 'join') {
+	keys %opts and croak "join action does not accept options";
 	my $notify_selector = shift @_;
 	my $join = { id => '#' . $self->{join_seq}++,
 		     depends => {},
@@ -493,7 +488,7 @@ sub _at_ready {
 	    my %opts = %{shift @$task};
 	    delete $opts{on_error};
 	    my $method = "_start_$action";
-	    my $pid = $self->$method($label, @$task);
+	    my $pid = $self->$method($label, \%opts, @$task);
 	    $debug and _debug(action => "[$label] action pid: ", $pid);
 	    unless (defined $pid) {
 		$self->_at_error($label, $host->{ssh}->error || OSSH_SLAVE_FAILED);
