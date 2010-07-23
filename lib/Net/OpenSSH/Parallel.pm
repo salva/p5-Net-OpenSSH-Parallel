@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use strict;
 use warnings;
@@ -1166,6 +1166,11 @@ run it. Include also the source code of the script, a description of
 what is going wrong and the details of your OS and the versions of
 Perl, C<Net::OpenSSH> and C<Net::OpenSSH::Parallel> you are using.
 
+=head2 Development version
+
+The source code for this module is hosted at GitHub:
+L<http://github.com/salva/p5-Net-OpenSSH-Parallel>.
+
 =head2 Commercial support
 
 Commercial support, professional services and custom software
@@ -1173,10 +1178,10 @@ development around this module are available through my current
 company. Drop me an email with a rough description of your
 requirements and we will get back to you ASAP.
 
-=head2 Development version
+=head2 My wishlist
 
-The source code for this module is hosted at GitHub:
-L<http://github.com/salva/p5-Net-OpenSSH-Parallel>.
+If you like this module and you're feeling generous, take a look at my
+Amazon Wish List: L<http://amzn.com/w/1WU1P6IR5QZ42>
 
 =head1 SEE ALSO
 

@@ -1,8 +1,15 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
-0.04  Jul 23, 2010
+
+0.06  Jul 23, 2010
       - document join operation
       - some minor bugs corrected on push method
+
+0.05 Feb 19, 2010
+      - command option passing to Net::OpenSSH was broken (bug report
+        by Sawyer X).
+      - copyright years updated
+      - add pointer to my wishlist :-)
 
 0.03  Oct 18, 2009
       - add Constants.pm file to MANIFEST
