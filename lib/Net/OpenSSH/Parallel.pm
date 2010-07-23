@@ -156,12 +156,13 @@ sub push {
     my $selector = shift;
     my $action = shift;
     my $in_state = $self->{in_state};
-    my %opts = (ref $_[0] eq 'HASH' ? %{shift()} : ());
 
     if (ref $action eq 'CODE') {
 	$action = 'sub';
 	unshift @_, $action;
     }
+
+    my %opts = (($action ne 'sub' and ref $_[0] eq 'HASH') ? %{shift()} : ());
 
     my $alias = $action_alias{$action};
     $action = $alias if defined $alias;
@@ -191,8 +192,10 @@ sub push {
 
 	for my $label (@labels) {
 	    my $host = $self->{hosts}{$label};
-	    push @{$host->{queue}}, [$action, {}, $join];
+	    push @{$host->{queue}}, [join => {}, $join];
 	    $debug and _debug(api => "[$label] join $join->{id} queued");
+	    $self->_set_host_state($label, 'ready')
+		if $in_state->{done}{$label};
 	}
     }
     else {
@@ -285,7 +288,7 @@ sub _at_error {
     }
 
     delete $host->{current_task_reconns};
- 
+
     if ($on_error == OSSH_ON_ERROR_IGNORE) {
 	if ($error == OSSH_JOIN_FAILED) {
 	    $self->_set_host_state($label, 'ready');
@@ -854,7 +857,7 @@ base to some of its properties.
 
 For instance:
 
-  $pssh->queue('*', scp_get => "/var/log/messages", "messages.%HOST%");
+  $pssh->push('*', scp_get => "/var/log/messages", "messages.%HOST%");
 
 copies the log files appending the name of the remote hosts to the
 local file names.
@@ -1046,6 +1049,36 @@ hosts.
 
 Queues a call to a perl subroutine that will be executed locally.
 
+Note that subroutines are executed synchronously in the same process,
+so no other task will be scheduled while they run.
+
+=item join => $selector
+
+Joins allow to synchronize jobs between different servers.
+
+For instance:
+
+  $ssh->push('server_B', scp_get => '/tmp/foo', 'foo');
+  $ssh->push('server_A', join => 'server_B');
+  $ssh->push('server_A', scp_put => 'foo', '/tmp/foo');
+
+The join makes server_A to wait for the C<scp_get> operation queued in
+server_B to finish before proceeding with the C<scp_put>.
+
+In general the join will make the selected servers to wait for any
+task queued on the servers matched by C<$selector> to finish before
+proceeding with the next queued tasks.
+
+One common usage is to synchronize all servers at some point:
+
+  $ssh->push('*', join => '*');
+
+By default, errors are propagated at joins. For instance, in the
+example above, if the scp_get operation queued on server_B failed, it
+would abort any further operation queued on server_B and any further
+operation queued after the join in server_A. See also L</Error
+handling>.
+
 =back
 
 When given, C<%opts> can contain the following options:
@@ -1054,7 +1087,7 @@ When given, C<%opts> can contain the following options:
 
 =item on_error => $fail_mode
 
-=item on_error => sub { }
+=item on_error => sub { ... }
 
 See L</Error handling>.
 
@@ -1062,7 +1095,7 @@ See L</Error handling>.
 
 not implemented yet!
 
-=item on_done => sub { }
+=item on_done => sub { ... }
 
 not implemented yet!
 
@@ -1171,7 +1204,7 @@ several host in parallel.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright E<copy> 2009 by Salvador FandiE<ntilde>o
+Copyright E<copy> 2009, 2010 by Salvador FandiE<ntilde>o
 (sfandino@yahoo.com).
 
 This library is free software; you can redistribute it and/or modify
