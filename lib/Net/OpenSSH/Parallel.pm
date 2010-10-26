@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 use strict;
 use warnings;
@@ -167,7 +167,7 @@ sub push {
     my $alias = $action_alias{$action};
     $action = $alias if defined $alias;
 
-    $action =~ /^(?:command|scp_get|scp_put|join|sub|_notify)$/
+    $action =~ /^(?:command|(?:(?:rsync|scp)_(?:get|put))|join|sub|_notify)$/
 	or croak "bad action '$action'";
 
     my @labels = $self->_select_labels($selector);
@@ -536,6 +536,28 @@ sub _start_scp_put {
     $debug and _debug(action => "[$label] start scp_put action");
     $opts->{async} = 1;
     $ssh->scp_put($opts, @_);
+}
+
+sub _start_rsync_get {
+    my $self = shift;
+    my $label = shift;
+    my $opts = shift;
+    my $host = $self->{hosts}{$label};
+    my $ssh = $host->{ssh}; 
+    $debug and _debug(action => "[$label] start rsync_get action");
+    $opts->{async} = 1;
+    $ssh->rsync_get($opts, @_);
+}
+
+sub _start_rsync_put {
+    my $self = shift;
+    my $label = shift;
+    my $opts = shift;
+    my $host = $self->{hosts}{$label};
+    my $ssh = $host->{ssh};
+    $debug and _debug(action => "[$label] start rsync_put action");
+    $opts->{async} = 1;
+    $ssh->rsync_put($opts, @_);
 }
 
 sub _start_join {
@@ -1041,6 +1063,13 @@ Example:
 
 These methods queue an SCP remote file copy operation in the selected
 hosts.
+
+=item rsync_get => @remote, $local
+
+=item rsync_put => @local, $remote
+
+These methods queue an rsync remote file copy operation in the
+selected hosts.
 
 =item sub { ... }
 
