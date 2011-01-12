@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 use strict;
 use warnings;
@@ -147,9 +147,10 @@ sub _select_labels {
     return @labels;
 }
 
-my %action_alias = (get => 'scp_get',
-		    put => 'scp_put',
-		    cmd => 'command');
+my %action_alias = (get  => 'scp_get',
+		    put  => 'scp_put',
+                    psub => 'parsub',
+		    cmd  => 'command');
 
 sub push {
     my $self = shift;
@@ -158,17 +159,17 @@ sub push {
     my $in_state = $self->{in_state};
 
     if (ref $action eq 'CODE') {
-	$action = 'sub';
 	unshift @_, $action;
+	$action = 'sub';
     }
-
-    my %opts = (($action ne 'sub' and ref $_[0] eq 'HASH') ? %{shift()} : ());
 
     my $alias = $action_alias{$action};
     $action = $alias if defined $alias;
 
-    $action =~ /^(?:command|(?:(?:rsync|scp)_(?:get|put))|join|sub|_notify)$/
+    $action =~ /^(?:command|(?:(?:rsync|scp)_(?:get|put))|join|sub|parsub|_notify)$/
 	or croak "bad action '$action'";
+
+    my %opts = (($action ne 'sub' and ref $_[0] eq 'HASH') ? %{shift()} : ());
 
     my @labels = $self->_select_labels($selector);
 
@@ -461,6 +462,8 @@ sub _at_ready {
 	    next;
 	}
 	elsif ($action eq 'sub') {
+            # use Data::Dumper;
+            # _debug (action => Dumper(@$task));
 	    shift @$task;
 	    my $sub = shift @$task;
 	    $debug and _debug(action => "[$label] calling sub $sub");
@@ -468,34 +471,53 @@ sub _at_ready {
 	    next;
 	}
 	else {
-	    my $ssh = $host->{ssh};
-	    unless ($ssh) {
-		# unshift the task we have just removed and connect first:
-		unshift @$task, $action;
-		unshift @$queue, $task;
-		if (my $max_conns = $self->{max_conns}) {
-		    $self->_disconnect_any_host() if $self->{num_conns} >= $max_conns;
-		}
-		$debug and _debug(at => "[$label] host is not connected, connecting...");
-		$self->_at_connect($label);
-		return;
-	    }
+            my $pid;
+            if ($action eq 'parsub') {
+                $host->{current_task} = [$action, @$task];
+                shift @$task; # discard %opts
+                my $sub = shift @$task;
+                $debug and _debug(action => "[$label] calling parallel sub $sub");
+                $pid = fork;
+                unless ($pid) {
+                    unless (defined $pid) {
+                        $self->_at_error($label, dualvar(OSSH_PARSUB_FAILED, "unable to run parsub, fork failed: $!"));
+                        return;
+                    }
+                    eval { $sub->($label, @$task) };
+                    $@ and $debug and _debug(error => "slave died on parsub: $@");
+                    POSIX::_exit($@ ? 1 : 0);
+                }
+            }
+            else {
+                my $ssh = $host->{ssh};
+                unless ($ssh) {
+                    # unshift the task we have just removed and connect first:
+                    unshift @$task, $action;
+                    unshift @$queue, $task;
+                    if (my $max_conns = $self->{max_conns}) {
+                        $self->_disconnect_any_host() if $self->{num_conns} >= $max_conns;
+                    }
+                    $debug and _debug(at => "[$label] host is not connected, connecting...");
+                    $self->_at_connect($label);
+                    return;
+                }
 
-	    if (my $error = $ssh->error) {
-		$self->_at_error($label, $error);
-		return;
-	    }
+                if (my $error = $ssh->error) {
+                    $self->_at_error($label, $error);
+                    return;
+                }
 
-	    $host->{current_task} = [$action, @$task];
-	    my %opts = %{shift @$task};
-	    delete $opts{on_error};
-	    my $method = "_start_$action";
-	    my $pid = $self->$method($label, \%opts, @$task);
-	    $debug and _debug(action => "[$label] action pid: ", $pid);
-	    unless (defined $pid) {
-		$self->_at_error($label, $host->{ssh}->error || OSSH_SLAVE_FAILED);
-		return;
-	    }
+                $host->{current_task} = [$action, @$task];
+                my %opts = %{shift @$task};
+                delete $opts{on_error};
+                my $method = "_start_$action";
+                $pid = $self->$method($label, \%opts, @$task);
+                $debug and _debug(action => "[$label] action pid: ", $pid);
+                unless (defined $pid) {
+                    $self->_at_error($label, $host->{ssh}->error || OSSH_SLAVE_FAILED);
+                    return;
+                }
+            }
 	    $self->{host_by_pid}{$pid} = $label;
 	    $self->_set_host_state($label, 'running');
 	    return;
@@ -571,13 +593,21 @@ sub _finish_task {
     if (defined $label) {
 	$debug and _debug(action => "[$label] action finished pid: $pid, rc: $?");
 	my $host = $self->{hosts}{$label};
-	my $ssh = $host->{ssh} or die "internal error: $label is not connected";
-	if ($?) {
-	    my $rc = ($? >> 8);
-	    my $error = $ssh->error;
-	    if (!$error or $rc < 255) {
-		$error = dualvar(OSSH_SLAVE_FAILED,
-				 "child exited with non-zero return code ($rc)")
+        if ($?) {
+            my ($action) = @{$host->{current_task}};
+            my $rc = ($? >> 8);
+            my $error;
+            if ($action eq 'parsub') {
+                $error = dualvar(OSSH_PARSUB_FAILED,
+                                 "parsub exited with non-zero return code ($rc)");
+            }
+            else {
+                my $ssh = $host->{ssh} or die "internal error: $label is not connected";
+                $error = $ssh->error;
+                if (!$error or $rc < 255) {
+                    $error = dualvar(OSSH_SLAVE_FAILED,
+                                     "child exited with non-zero return code ($rc)");
+                }
 	    }
 	    $self->_at_error($label, $error);
 	}
@@ -740,14 +770,6 @@ Net::OpenSSH::Parallel - Run SSH jobs in parallel
 =head1 DESCRIPTION
 
 Run this here, that there, etc.
-
-  ***
-  *** Note: This is an early release!
-  ***
-  *** The module design and particularly the public API has not yet
-  *** stabilized. Future versions of the module are not guaranteed to
-  *** remain compatible with this one.
-  ***
 
 C<Net::OpenSSH::Parallel> is an scheduler that can run commands in
 parallel in a set of hosts through SSH. It tries to find a compromise
@@ -1071,12 +1093,32 @@ hosts.
 These methods queue an rsync remote file copy operation in the
 selected hosts.
 
-=item sub { ... }
+=item sub { ... }, @extra_args
 
 Queues a call to a perl subroutine that will be executed locally.
 
 Note that subroutines are executed synchronously in the same process,
-so no other task will be scheduled while they run.
+so no other task will be scheduled while they are running.
+
+The sub is called as
+
+  $sub->($pssh, $label, @extra_args)
+
+where C<$pssh> is the current Net::OpenSSH::Parallel object.
+
+=item parsub => sub { ... }, @extra_args
+
+Queues a call to a perl subroutine that will be executed locally on a
+forked process.
+
+The sub is called as
+
+  $sub->($label, @extra_args)
+
+Note that the interface is different to that of the C<sub> action.
+
+If the subroutine dies or calls C<_exit> with a non zero return code,
+the error handling code will be triggered (see L</"Error handling">).
 
 =item join => $selector
 
@@ -1177,13 +1219,17 @@ Non zero exit code is not always an error.
 
 =head1 BUGS AND SUPPORT
 
-This is a very, very, very early release of the module, lots of bugs
-should be expected!!!
+This module should be considered beta quality, everything seems to
+work but it may yet contain critical bugs.
 
 If you find any, report it via L<http://rt.cpan.org> or by email (to
 sfandino@yahoo.com), please.
 
 Feedback and comments are also welcome!
+
+The 'sub' and 'parsub' features should be considered experimental and
+its API or behaviour could be changed in future versions of the
+module.
 
 =head2 Reporting bugs
 
@@ -1235,7 +1281,7 @@ several host in parallel.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright E<copy> 2009, 2010 by Salvador FandiE<ntilde>o
+Copyright E<copy> 2009-2011 by Salvador FandiE<ntilde>o
 (sfandino@yahoo.com).
 
 This library is free software; you can redistribute it and/or modify

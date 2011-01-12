@@ -1,5 +1,10 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
+0.09  Jan 12, 2011
+      - add support for parsub action
+      - solve bugs on sub action
+      - remove early release note from docs
+
 0.08  Oct 26, 2010
       - add support for rsync operations
 

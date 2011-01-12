@@ -16,7 +16,8 @@ $EXPORT_TAGS{error} = [@{$EXPORT_TAGS{error}}];
 delete $EXPORT_TAGS{all};
 
 our %error = ( OSSH_JOIN_FAILED => 100,
-	       OSSH_ABORTED => 101 );
+	       OSSH_ABORTED => 101,
+               OSSH_PARSUB_FAILED => 102 );
 
 our %on_error = ( OSSH_ON_ERROR_IGNORE => 201,
 		  OSSH_ON_ERROR_DONE => 202,
@@ -61,6 +62,7 @@ Besides the error codes defined in Net::OpenSSH this module also
 defines:
 
   OSSH_JOIN_FAILED
+  OSSH_PARSUB_FAILED
   OSSH_ABORTED
 
 =item :on_error
@@ -75,7 +77,7 @@ defines:
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2009 by Salvador FandiE<ntilde>o (sfandino@yahoo.com)
+Copyright (C) 2009, 2011 by Salvador FandiE<ntilde>o (sfandino@yahoo.com)
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.10.0 or,
