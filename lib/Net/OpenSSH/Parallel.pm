@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 
 use strict;
 use warnings;
@@ -471,25 +471,8 @@ sub _at_ready {
 	    next;
 	}
 	else {
-            my $pid;
-            if ($action eq 'parsub') {
-                $host->{current_task} = [$action, @$task];
-                shift @$task; # discard %opts
-                my $sub = shift @$task;
-                $debug and _debug(action => "[$label] calling parallel sub $sub");
-                $pid = fork;
-                unless ($pid) {
-                    unless (defined $pid) {
-                        $self->_at_error($label, dualvar(OSSH_PARSUB_FAILED, "unable to run parsub, fork failed: $!"));
-                        return;
-                    }
-                    eval { $sub->($label, @$task) };
-                    $@ and $debug and _debug(error => "slave died on parsub: $@");
-                    POSIX::_exit($@ ? 1 : 0);
-                }
-            }
-            else {
-                my $ssh = $host->{ssh};
+            my $ssh = $host->{ssh};
+            unless ($action eq 'parsub' and $task->[0]{no_ssh}) {
                 unless ($ssh) {
                     # unshift the task we have just removed and connect first:
                     unshift @$task, $action;
@@ -506,34 +489,54 @@ sub _at_ready {
                     $self->_at_error($label, $error);
                     return;
                 }
-
-                $host->{current_task} = [$action, @$task];
-                my %opts = %{shift @$task};
-                delete $opts{on_error};
-                my $method = "_start_$action";
-                $pid = $self->$method($label, \%opts, @$task);
-                $debug and _debug(action => "[$label] action pid: ", $pid);
-                unless (defined $pid) {
-                    $self->_at_error($label, $host->{ssh}->error || OSSH_SLAVE_FAILED);
-                    return;
-                }
             }
-	    $self->{host_by_pid}{$pid} = $label;
-	    $self->_set_host_state($label, 'running');
-	    return;
-	}
+
+            $host->{current_task} = [$action, @$task];
+            my %opts = %{shift @$task};
+            delete $opts{on_error};
+            my $method = "_start_$action";
+            my $pid = $self->$method($label, \%opts, @$task);
+            $debug and _debug(action => "[$label] action pid: ", $pid);
+            unless (defined $pid) {
+                my $error = (($ssh && $ssh->error) ||
+                             dualvar(($action eq 'parsub'
+                                      ? "Unable to fork parsub"
+                                      : "Action $action failed to start"), OSSH_SLAVE_FAILED));
+                $self->_at_error($label, $error);
+                return;
+            }
+            $self->{host_by_pid}{$pid} = $label;
+            $self->_set_host_state($label, 'running');
+            return;
+        }
     }
     $debug and _debug(at => "[$label] at_ready, queue_is_empty, we are done!");
     $self->_set_host_state($label, 'done');
     $self->_disconnect_host($label);
 }
 
+sub _start_parsub {
+    my $self = shift;
+    my $label = shift;
+    my $opts = shift;
+    my $sub = shift;
+    my $ssh = $self->{hosts}{$label}{ssh};
+    $debug and _debug(action => "[$label] start parsub action [@_]");
+    my $pid = fork;
+    unless ($pid) {
+        defined $pid or return;
+        eval { $sub->($label, $ssh, @_) };
+        $@ and $debug and _debug(error => "slave died on parsub: $@");
+        POSIX::_exit($@ ? 1 : 0);
+    }
+    $pid;
+}
+
 sub _start_command {
     my $self = shift;
     my $label = shift;
     my $opts = shift;
-    my $host = $self->{hosts}{$label};
-    my $ssh = $host->{ssh};
+    my $ssh = $self->{hosts}{$label}{ssh};
     $debug and _debug(action => "[$label] start command action [@_]");
     $ssh->spawn($opts, @_);
 }
@@ -542,8 +545,7 @@ sub _start_scp_get {
     my $self = shift;
     my $label = shift;
     my $opts = shift;
-    my $host = $self->{hosts}{$label};
-    my $ssh = $host->{ssh}; 
+    my $ssh = $self->{hosts}{$label}{ssh};
     $debug and _debug(action => "[$label] start scp_get action");
     $opts->{async} = 1;
     $ssh->scp_get($opts, @_);
@@ -553,8 +555,7 @@ sub _start_scp_put {
     my $self = shift;
     my $label = shift;
     my $opts = shift;
-    my $host = $self->{hosts}{$label};
-    my $ssh = $host->{ssh};
+    my $ssh = $self->{hosts}{$label}{ssh};
     $debug and _debug(action => "[$label] start scp_put action");
     $opts->{async} = 1;
     $ssh->scp_put($opts, @_);
@@ -564,8 +565,7 @@ sub _start_rsync_get {
     my $self = shift;
     my $label = shift;
     my $opts = shift;
-    my $host = $self->{hosts}{$label};
-    my $ssh = $host->{ssh}; 
+    my $ssh = $self->{hosts}{$label}{ssh};
     $debug and _debug(action => "[$label] start rsync_get action");
     $opts->{async} = 1;
     $ssh->rsync_get($opts, @_);
@@ -575,16 +575,17 @@ sub _start_rsync_put {
     my $self = shift;
     my $label = shift;
     my $opts = shift;
-    my $host = $self->{hosts}{$label};
-    my $ssh = $host->{ssh};
+    my $ssh = $self->{hosts}{$label}{ssh};
     $debug and _debug(action => "[$label] start rsync_put action");
     $opts->{async} = 1;
     $ssh->rsync_put($opts, @_);
 }
 
+# FIXME: dead code?
 sub _start_join {
     my $self = shift;
     my $label = shift;
+    warn "internal mismatch: this shouldn't be happening!";
 }
 
 sub _finish_task {
@@ -596,19 +597,12 @@ sub _finish_task {
         if ($?) {
             my ($action) = @{$host->{current_task}};
             my $rc = ($? >> 8);
-            my $error;
-            if ($action eq 'parsub') {
-                $error = dualvar(OSSH_PARSUB_FAILED,
-                                 "parsub exited with non-zero return code ($rc)");
+            my $ssh = $host->{ssh} or die "internal error: $label is not connected";
+            my $error = ($ssh && $ssh->error);
+            if (!$error or $rc < 255) {
+                $error = dualvar(OSSH_SLAVE_FAILED,
+                                 "child exited with non-zero return code ($rc)");
             }
-            else {
-                my $ssh = $host->{ssh} or die "internal error: $label is not connected";
-                $error = $ssh->error;
-                if (!$error or $rc < 255) {
-                    $error = dualvar(OSSH_SLAVE_FAILED,
-                                     "child exited with non-zero return code ($rc)");
-                }
-	    }
 	    $self->_at_error($label, $error);
 	}
 	else {
@@ -863,25 +857,27 @@ The module accepts two parameters to limit resource usage:
 
 =over
 
-=item * C<maximum_workers>
+=item * C<workers>
 
 is the maximun number of remote commands that can be running
 concurrently.
 
-=item * C<maximum_connections>
+=item * C<connections>
 
 is the maximum number of SSH connections that can be active
 concurrently.
 
 =back
 
-In practice, limiting C<maximum_connections> indirectly limits RAM
-usage and limiting the C<maximum_workers> indirectly limits CPU usage.
+In practice, limiting the maximum number of connections indirectly
+limits RAM usage and limiting the the maximum number of workers
+indirectly limits CPU usage.
 
-The module requires C<maximum_connections> to be at least equal
-or bigger than C<maximum_workers>, and it is recomended that
-C<maximum_connections E<gt>= 2 * maximum_workers> (otherwise the
-scheduler will not be able to reuse connections efficiently).
+The module requires the maximum number of connections to be at least
+equal or bigger than the maximun number of workers, and it is
+recomended that C<maximum_connections E<gt>= 2 * maximum_workers>
+(otherwise the scheduler will not be able to reuse connections
+efficiently).
 
 You will have to experiment to find out which combinations give the
 best results in your particular scenarios.
@@ -1113,12 +1109,46 @@ forked process.
 
 The sub is called as
 
-  $sub->($label, @extra_args)
+  $sub->($label, $ssh, @extra_args)
+
+Where C<$ssh> is an L<Net::OpenSSH> object that can be used to
+interact with the remote machine.
 
 Note that the interface is different to that of the C<sub> action.
 
+An example of usage:
+
+  sub sudo_install {
+      my ($label, $ssh, @pkgs) = @_;
+      my ($pty) = $ssh->open2pty('sudo', 'apt-get', 'install', @pkgs);
+      my $expect = Expect->init($pty);
+      $expect->raw_pty(1);
+      $expect->expect($timeout, ":");
+      $expect->send("$passwd\n");
+      $expect->expect($timeout, "\n");
+      $expect->raw_pty(0);
+      while(<$expect>) { print };
+      close $expect;
+  }
+  
+  $pssh->push('*', parsub => \&sudo_install, 'scummvm');
+
 If the subroutine dies or calls C<_exit> with a non zero return code,
 the error handling code will be triggered (see L</"Error handling">).
+
+The C<parsub> action accepts the additional option C<no_ssh>
+indicating that the C<$ssh> object is not going to be used. For
+instance:
+
+  $pssh->push('*', parsub => { no_ssh => 1 },
+              sub {
+                    my $label = shift;
+                    { exec "gzip", "/tmp/file-$label" };
+                    die "exec failed: $!";
+              });
+
+That can make the script faster when the maximum number of
+simultaneous connections is limited. See L<Local resource usage>.
 
 =item join => $selector
 
@@ -1133,8 +1163,8 @@ For instance:
 The join makes server_A to wait for the C<scp_get> operation queued in
 server_B to finish before proceeding with the C<scp_put>.
 
-In general the join will make the selected servers to wait for any
-task queued on the servers matched by C<$selector> to finish before
+In general the join will make the selected servers wait for any task
+queued on the servers matched by C<$selector> to finish before
 proceeding with the next queued tasks.
 
 One common usage is to synchronize all servers at some point:

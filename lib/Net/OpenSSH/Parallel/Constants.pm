@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel::Constants;
 
-our $VERSION = '0.01';
+our $VERSION = '0.10';
 
 use strict;
 use warnings;
@@ -16,8 +16,7 @@ $EXPORT_TAGS{error} = [@{$EXPORT_TAGS{error}}];
 delete $EXPORT_TAGS{all};
 
 our %error = ( OSSH_JOIN_FAILED => 100,
-	       OSSH_ABORTED => 101,
-               OSSH_PARSUB_FAILED => 102 );
+	       OSSH_ABORTED => 101 );
 
 our %on_error = ( OSSH_ON_ERROR_IGNORE => 201,
 		  OSSH_ON_ERROR_DONE => 202,
@@ -62,7 +61,6 @@ Besides the error codes defined in Net::OpenSSH this module also
 defines:
 
   OSSH_JOIN_FAILED
-  OSSH_PARSUB_FAILED
   OSSH_ABORTED
 
 =item :on_error
