@@ -1089,6 +1089,8 @@ hosts.
 These methods queue an rsync remote file copy operation in the
 selected hosts.
 
+=item sub => sub { ... }, @extra_args
+
 =item sub { ... }, @extra_args
 
 Queues a call to a perl subroutine that will be executed locally.
