@@ -147,10 +147,26 @@ sub _select_labels {
     return @labels;
 }
 
-my %action_alias = (get  => 'scp_get',
-		    put  => 'scp_put',
-                    psub => 'parsub',
-		    cmd  => 'command');
+sub all { shift->('*', @_) }
+
+my %push_action_alias = (get  => 'scp_get',
+                         put  => 'scp_put',
+                         psub => 'parsub',
+                         cmd  => 'command');
+
+my %push_min_args = ( here      => 1,
+                      goto      => 1,
+                      stop      => 0,
+                      sub       => 1,
+                      parsub    => 1,
+                      scp_get   => 2,
+                      scp_put   => 2,
+                      rsync_get => 2,
+                      rsync_put => 2 );
+
+my %push_max_args =  ( here     => 1,
+                       goto     => 1,
+                       stop     => 0 );
 
 sub push {
     my $self = shift;
@@ -163,18 +179,27 @@ sub push {
 	$action = 'sub';
     }
 
-    my $alias = $action_alias{$action};
+    my $alias = $push_action_alias{$action};
     $action = $alias if defined $alias;
 
-    $action =~ /^(?:command|(?:(?:rsync|scp)_(?:get|put))|join|sub|parsub|_notify)$/
+    $action =~ /^(?:command|(?:(?:rsync|scp)_(?:get|put))|join|sub|parsub|here|stop|goto|_notify)$/
 	or croak "bad action '$action'";
 
     my %opts = (($action ne 'sub' and ref $_[0] eq 'HASH') ? %{shift()} : ());
+    %opts and grep($action eq $_, qw(join label))
+        and croak "unsupported option(s) '" . join("', '", keys %opts) . "' in $action action";
 
     my @labels = $self->_select_labels($selector);
 
+    my $max = $push_max_args{$action};
+    croak "too many parameters for action $action"
+        if (defined $max and $max < @_);
+
+    my $min = $push_min_args{$action};
+    croak "too few parameters for action $action"
+        if (defined $min and $min > @_);
+
     if ($action eq 'join') {
-	keys %opts and croak "join action does not accept options";
 	my $notify_selector = shift @_;
 	my $join = { id => '#' . $self->{join_seq}++,
 		     depends => {},
@@ -203,7 +228,7 @@ sub push {
 		if $in_state->{done}{$label};
 	}
     }
-    return @labels;
+    @labels;
 }
 
 sub _audit_conns {
@@ -270,6 +295,17 @@ sub _at_error {
     $debug and _debug(error => "[$label] on_error (final): $on_error, error: $error (".($error+0).")");
 
     my $queue = $host->{queue};
+
+    if (ref $on_error eq 'SCALAR') {
+        if ($error == OSSH_GOTO_FAILED) {
+            $on_error = OSSH_ON_ERROR_ABORT_ALL;
+        }
+        else {
+            $self->_set_host_state($label, 'ready');
+            $self->_skip($label, $$on_error);
+            return;
+        }
+    }
 
     if ($on_error == OSSH_ON_ERROR_RETRY) {
 	if ($error == OSSH_MASTER_FAILED) {
@@ -456,6 +492,18 @@ sub _at_ready {
 	    $self->_set_host_state($label, 'waiting');
 	    return;
 	}
+        elsif ($action eq 'here') {
+            next;
+        }
+        elsif ($action eq 'stop') {
+            $self->_skip($label, 'END');
+            next;
+        }
+        elsif ($action eq 'goto') {
+            my (undef, $target) = @$task;
+            $self->_skip($label, $target);
+            next;
+        }
 	elsif ($action eq '_notify') {
 	    my (undef, $join) = @$task;
 	    $self->_join_notify($label, $join);
@@ -586,6 +634,27 @@ sub _start_join {
     my $self = shift;
     my $label = shift;
     warn "internal mismatch: this shouldn't be happening!";
+}
+
+sub _skip {
+    my ($self, $label, $target) = @_;
+    $debug and _debug(action => "skipping until $target");
+    my $host = $self->{hosts}{$label};
+    my $queue = $host->{queue};
+    my ($ix, $task);
+    for ($ix = 0; defined($task = $queue->[$ix]); $ix++) {
+        last if ($task->[0] eq 'here' and $task->[2] eq $target);
+    }
+    if ($task or $target eq 'END') {
+        for (1..$ix) {
+            my $task = shift @$queue;
+            $self->_join_notify($label, $task->[2])
+                if $task->[0] eq '_notify';
+        }
+        return;
+    }
+    $debug and _debug(action => "here label $target not found");
+    $self->_at_error($label, OSSH_GOTO_FAILED);
 }
 
 sub _finish_task {
@@ -1179,6 +1248,20 @@ would abort any further operation queued on server_B and any further
 operation queued after the join in server_A. See also L</Error
 handling>.
 
+=item here => $tag
+
+Push a label in the stack that can be used as a target for goto
+operations.
+
+=item goto => $target
+
+Jumps forward until the given C<here> tag is found.
+
+=item stop
+
+Discards any additional operations queued. Any pending joins will be
+successfully fulfilled.
+
 =back
 
 When given, C<%opts> can contain the following options:
@@ -1204,6 +1287,14 @@ not implemented yet!
 Any other option will be passed to the corresponding L<Net::OpenSSH>
 method (L<spawn|Net::OpenSSH/spawn>, L<scp_put|Net::OpenSSH/scp_put>,
 etc.).
+
+=item $pssh->all($action => @args)
+
+=item $pssh->all($action => \%opts, @args)
+
+Shortcut for...
+
+  $pssh->push('*', $action, \%opts, @args);
 
 =item $pssh->run
 
