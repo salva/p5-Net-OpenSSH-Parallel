@@ -1039,6 +1039,20 @@ task that was being carried out.
 The return value of the subroutine must be one of the described
 constants and the corresponding policy will be applied.
 
+=head3 Jumping on errors
+
+When a scalar reference is used as the police or returned by an
+C<on_error> callback, the module does a goto targeting the string on
+the reference. For instance:
+
+  $pssh->push('*', cmd     => { on_error => \'no_dir' },
+                              'test -d /var/tmp/foo');
+  $pssh->push('*', scp_get => '/var/tmp/foo/*', $localdir);
+  $pssh->push('*', here    => 'no_dir');
+
+This feature is experimental and may be removed or changed on future
+releases!
+
 =head3 Retrying connection errors
 
 If the module fails when trying to stablish a new SSH connection or
