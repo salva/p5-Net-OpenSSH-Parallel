@@ -1250,17 +1250,39 @@ handling>.
 
 =item here => $tag
 
-Push a label in the stack that can be used as a target for goto
+Push a tag in the stack that can be used as a target for goto
 operations.
 
 =item goto => $target
 
-Jumps forward until the given C<here> tag is found.
+Jumps forward until the given C<here> tag is reached.
+
+Joins to other hosts queues will be ignored, and joins from other
+queues to this one will be succesfully fulfilled. For instance:
+
+  $pssh->add_host(a => ...);
+  $pssh->add_host(b => ...);
+  $pssh->push('*', cmd  => 'echo "hello from %HOST"');
+  $pssh->push('a', goto => 'there');
+  $pssh->push('a', join => 'b');                     # ignored by a on goto
+  $pssh->push('b', join => 'a');                     # fulfilled by a on goto
+  $pssh->push('*', cmd  => 'echo "hello from %HOST% again"');
+  $pssh->push('*', here => 'there');
+  $pssh->push('*', cmd  => 'echo "bye bye from %HOST%");
+
+Note that it is not possible to jump backguards.
+
+There is an special target C<END> that can be used to jump to the end
+of the queue.
 
 =item stop
 
 Discards any additional operations queued. Any pending joins will be
 successfully fulfilled.
+
+It is equivalent to
+
+  $pssh->push('*', goto => 'END');
 
 =back
 
