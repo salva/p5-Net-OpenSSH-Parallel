@@ -1,5 +1,12 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
+0.11
+      - new or_goto feature
+      - new actions here, goto, stop
+      - new get_errors method
+      - new all method
+      - pointer to OpenSSH donations page, use it!!!
+
 0.10  Jan 13, 2011
       - *** parsub backward incompatible API changes ***
       - improved parsub support
