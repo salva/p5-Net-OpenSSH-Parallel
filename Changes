@@ -1,6 +1,6 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
-0.11
+0.11  May 9, 2011
       - new or_goto feature
       - new actions here, goto, stop
       - new get_errors method
