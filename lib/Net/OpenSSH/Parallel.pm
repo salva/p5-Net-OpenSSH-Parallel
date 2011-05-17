@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 
 use strict;
 use warnings;
@@ -19,7 +19,7 @@ sub new {
     my ($class, %opts) = @_;
     my $max_workers = delete $opts{workers};
     my $max_conns = delete $opts{connections};
-    my $max_reconns = delete $opts{reconnections};
+    my $reconnections = delete $opts{reconnections};
     my $on_error = delete $opts{on_error};
 
     if ($max_conns) {
@@ -55,7 +55,7 @@ sub new {
 		 max_workers => $max_workers,
 		 max_conns => $max_conns,
 		 num_conns => 0,
-		 max_reconns => $max_reconns,
+		 reconnections => $reconnections,
 		 on_error => $on_error,
 	       };
     bless $self, $class;
@@ -84,7 +84,7 @@ sub add_host {
     $opts{host} = $label unless defined $opts{host};
 
     my $on_error = delete $opts{on_error};
-    my $max_reconns = delete $opts{reconnections};
+    my $reconnections = delete $opts{reconnections};
 
     my $host = { label => $label,
 		 workers => 1,
@@ -93,7 +93,7 @@ sub add_host {
 		 state => 'done',
 		 queue => [],
 		 on_error => $on_error,
-		 max_reconns => $max_reconns,
+		 reconnections => $reconnections,
 	       };
 
     $self->{hosts}{$label} = $host;
@@ -263,6 +263,7 @@ sub _at_error {
     my ($self, $label, $error) = @_;
     my $host = $self->{hosts}{$label};
     my $task = delete $host->{current_task};
+    my $queue = $host->{queue};
 
     $debug and _debug(error => "_at_error label: $label, error: $error");
 
@@ -271,10 +272,15 @@ sub _at_error {
 
     my $on_error;
     if ($error == OSSH_MASTER_FAILED) {
-	my $max_reconns = _hash_chain_get(max_reconns => $host, $self) || 0;
-	my $reconns = $host->{current_task_reconns}++ || 0;
-	$debug and _debug(error => "[$label] reconnection: $reconns, max: $max_reconns");
-	if ($reconns < $max_reconns) {
+        if ($host->{state} eq 'connecting') {
+            # task is not set in state connecting!
+            $task and die "internal error: task is defined in state connecting";
+            $opts = $queue->[0][1] if @$queue;
+        }
+	my $max_reconnections = _hash_chain_get(reconnections => $opts, $host, $self) || 0;
+	my $reconnections = $host->{current_task_reconnections}++ || 0;
+	$debug and _debug(error => "[$label] reconnection: $reconnections, max: $max_reconnections");
+	if ($reconnections < $max_reconnections) {
 	    $debug and _debug(error => "[$label] will reconnect!");
 	    $on_error = OSSH_ON_ERROR_RETRY;
 	}
@@ -295,8 +301,6 @@ sub _at_error {
 
     $debug and _debug(error => "[$label] on_error (final): $on_error, error: $error (".($error+0).")");
 
-    my $queue = $host->{queue};
-
     if ($on_error == OSSH_ON_ERROR_RETRY) {
 	if ($error == OSSH_MASTER_FAILED) {
 	    $self->_set_host_state($label, 'suspended');
@@ -315,7 +319,7 @@ sub _at_error {
 	return;
     }
 
-    delete $host->{current_task_reconns};
+    delete $host->{current_task_reconnections};
 
     if ($on_error == OSSH_ON_ERROR_IGNORE) {
 	if ($error == OSSH_JOIN_FAILED) {
@@ -323,9 +327,9 @@ sub _at_error {
 	}
 	elsif ($error == OSSH_MASTER_FAILED) {
 	    # stablishing a new connection failed, what we should do?
-	    # currently we remove the next task from the queue and
+	    # currently we remove the current task from the queue and
 	    # continue.
-	    shift @$queue;
+	    shift @$queue unless $task;
 	    $self->_set_host_state($label, 'suspended');
 	    $self->_disconnect_host($label);
 	    $self->_set_host_state($label, 'ready');
@@ -454,7 +458,7 @@ sub _disconnect_any_host {
     $self->_disconnect_host($label);
 }
 
-my @private_opts = qw(on_error or_goto);
+my @private_opts = qw(on_error or_goto reconnections);
 
 sub _at_ready {
     my ($self, $label) = @_;
@@ -690,7 +694,7 @@ sub _finish_task {
         $self->_set_host_state($label, 'ready');
         $self->_skip($label, $or_goto) if defined $or_goto;
         delete $host->{current_task};
-        delete $host->{current_task_reconns};
+        delete $host->{current_task_reconnections};
     }
     else {
 	my $label = delete $self->{ssh_master_by_pid}{$pid};
@@ -1137,7 +1141,7 @@ The accepted options are:
 
 Sets the error handling policy (see L</Error handling>).
 
-=item max_reconns => $maximum_reconnections
+=item reconnections => $maximum_reconnections
 
 See </Retrying connection errors>.
 
