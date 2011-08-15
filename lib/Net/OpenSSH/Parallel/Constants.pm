@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use Carp;
 
-use Net::OpenSSH::Constants qw(:all);
+use Net::OpenSSH::Constants;
 
 require Exporter;
 our @ISA = qw(Exporter);
