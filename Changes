@@ -3,6 +3,7 @@ Revision history for Perl extension Net::OpenSSH::Parallel.
 0.12
       - allow to set reconnections option per task
       - add reboot.pl sample
+      - minor documentation improvements and corrections
 
 0.11  May 9, 2011
       - new or_goto feature

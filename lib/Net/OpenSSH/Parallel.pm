@@ -1126,7 +1126,7 @@ Sets the error handling policy (see L</Error handling>).
 
 =item $pssh->add_host($label, $host, %opts)
 
-registers a new host into the C<$pssh> object.
+X<add_host>registers a new host into the C<$pssh> object.
 
 C<$label> is the name used to refer to the registered host afterwards.
 
@@ -1143,12 +1143,15 @@ Sets the error handling policy (see L</Error handling>).
 
 =item reconnections => $maximum_reconnections
 
-See </Retrying connection errors>.
+See L</Retrying connection errors>.
 
 =back
 
 Any additional option will be passed verbatim to the L<Net::OpenSSH>
-constructor later.
+constructor later. For instance:
+
+  $pssh->add_host($host, user => $user, password => $password);
+
 
 =item $pssh->push($selector, $action, \%opts, @action_args)
 
