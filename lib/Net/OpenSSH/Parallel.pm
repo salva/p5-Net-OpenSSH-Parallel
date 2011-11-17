@@ -82,6 +82,7 @@ sub add_host {
     $label =~ /([,*!()<>\/{}])/ and croak "invalid char '$1' in host label";
     my %opts = (@_ & 1 ? (host => @_) : @_);
     $opts{host} = $label unless defined $opts{host};
+    $opts{batch_mode} = 1 unless defined $opts{batch_mode};
 
     my $on_error = delete $opts{on_error};
     my $reconnections = delete $opts{reconnections};
