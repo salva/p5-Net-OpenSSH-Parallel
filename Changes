@@ -4,6 +4,7 @@ Revision history for Perl extension Net::OpenSSH::Parallel.
       - enable batch mode by default on the slave Net::OpenSSH objects
       - allow to set reconnections option per task
       - add reboot.pl and parallel_passwd.pl samples
+      - document how to run remote commands via sudo
       - minor documentation improvements and corrections
 
 0.11  May 9, 2011

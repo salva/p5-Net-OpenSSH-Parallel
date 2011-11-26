@@ -1382,6 +1382,47 @@ In scalar context returns the number of failed queues.
 
 =back
 
+=head1 FAQ - Frequently Asked Questions
+
+=item Running remote commands with sudo
+
+B<Q>: I need to run the remote commands with sudo that asks for a
+password. How can I do it?
+
+B<A>: First read the answer given to a similar question on
+L<Net::OpenSSH> FAQ.
+
+The problem is that Net::OpenSSH::Parallel methods do not support the
+<stdin_data> option, so you will have to use an external file.
+
+  $pssh->push('*', cmd => { stdin_file => $passwd_file },
+                   'sudo', '-Skp', '', '--', @cmd);
+
+One trick you can use if you only have one password is to use the
+C<DATA> file handle:
+
+  $pssh->push('*', cmd => { stdin_fh => \*DATA},
+              'sudo', '-Skp', '', '--', @cmd);
+  ...
+  # and at the end of your script
+  __DATA__
+  this-is-my-remote-password-for-sudo
+
+Or you can also use the C<parsub> action:
+
+  my %sudo_passwords = (host1 => "foo", ...);
+
+  sub sudo {
+    my ($label, $ssh, @cmd) = @_;
+    $ssh->system({stdin_data => "$sudo_passwords{$label}\n"},
+                 'sudo', '-Skp', '', '--', @cmd);
+  }
+
+  $pssh->push('*', parsub => \&sudo, @cmd);
+
+
+=back
+
 =head1 TODO
 
 =over
@@ -1473,11 +1514,18 @@ SSH.
 
 If your application requires orchestating workflows more complex than
 those supported by L<Net::OpenSSH::Parallel>, you should probably
-consider some L<POE> based solution (check
+consider some L<POE> or L<AnyEvent> based solution (check
 L<POE::Component::OpenSSH>).
 
 L<App::MrShell> is another module allowing to run the same command in
 several host in parallel.
+
+Some people find easier to use L<Net::OpenSSH> combined with
+L<Parallel::ForkManager>, L<threads> or L<Coro>.
+
+L<Net::SSH::Mechanize> is another framework written on top of
+L<AnyEvent> that allows to run remote commands through SSH in
+parallel.
 
 =head1 COPYRIGHT AND LICENSE
 
