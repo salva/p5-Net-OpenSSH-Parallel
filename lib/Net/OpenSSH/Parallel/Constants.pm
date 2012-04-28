@@ -1,6 +1,6 @@
 package Net::OpenSSH::Parallel::Constants;
 
-our $VERSION = '0.10';
+our $VERSION = '0.12';
 
 use strict;
 use warnings;
@@ -47,7 +47,7 @@ Net::OpenSSH::Parallel::Constants - Constant definitions for Net::OpenSSH::Paral
 
 =head1 SYNOPSIS
 
-  use Net::OpenSSH::Constants qw(:error :on_error);
+  use Net::OpenSSH::Parallel::Constants qw(:error :on_error);
 
 =head1 DESCRIPTION
 
@@ -77,7 +77,7 @@ defines:
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2009, 2011 by Salvador FandiE<ntilde>o (sfandino@yahoo.com)
+Copyright (C) 2009, 2011, 2012 by Salvador FandiE<ntilde>o (sfandino@yahoo.com)
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.10.0 or,
