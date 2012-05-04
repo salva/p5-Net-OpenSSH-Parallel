@@ -1,6 +1,7 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
-0.12
+0.12  May 4, 2012
+      - ignoring errors was broken
       - enable batch mode by default on the slave Net::OpenSSH objects
       - allow to set reconnections option per task
       - add reboot.pl and parallel_passwd.pl samples

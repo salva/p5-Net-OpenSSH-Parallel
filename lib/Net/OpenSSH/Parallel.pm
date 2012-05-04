@@ -323,10 +323,7 @@ sub _at_error {
     delete $host->{current_task_reconnections};
 
     if ($on_error == OSSH_ON_ERROR_IGNORE) {
-	if ($error == OSSH_JOIN_FAILED) {
-	    $self->_set_host_state($label, 'ready');
-	}
-	elsif ($error == OSSH_MASTER_FAILED) {
+	if ($error == OSSH_MASTER_FAILED) {
 	    # stablishing a new connection failed, what we should do?
 	    # currently we remove the current task from the queue and
 	    # continue.
@@ -335,6 +332,9 @@ sub _at_error {
 	    $self->_disconnect_host($label);
 	    $self->_set_host_state($label, 'ready');
 	}
+        else {
+	    $self->_set_host_state($label, 'ready');
+        }
 	# else do nothing
     }
     else {
