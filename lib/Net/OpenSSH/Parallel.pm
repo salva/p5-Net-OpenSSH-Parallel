@@ -1384,6 +1384,8 @@ In scalar context returns the number of failed queues.
 
 =head1 FAQ - Frequently Asked Questions
 
+=over 4
+
 =item Running remote commands with sudo
 
 B<Q>: I need to run the remote commands with sudo that asks for a
