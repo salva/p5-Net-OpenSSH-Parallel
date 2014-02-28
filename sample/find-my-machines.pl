@@ -9,13 +9,17 @@ use Socket;
 
 my $net = shift // die "network missing\n";
 
-my ($ip, $mask) = $net =~ m|^([^/]*)(?:/(\d+))?$|;
-my $iaddr = unpack(N => inet_aton($ip));
+my ($ip, $mask) = $net =~ m|^([^/]+)(?:/(\d+))?$|
+    or die "bad network specification\n";
 
 $mask ||= 24;
 $mask < 20 and die "network too big\n";
+
+my $addr = inet_aton($ip)
+    or die "unable to resolve IP\n";
+
 my $imask = (1 << (32 - $mask)) - 1;
-$iaddr &= ~$imask;
+my $iaddr = unpack(N => $addr) & ~$imask;
 
 my $pssh = Net::OpenSSH::Parallel->new(connections => 64,
                                        reconnections => 0);
@@ -56,6 +60,10 @@ is printed.
   $ find-my-machines.pl 10.0.8.0/23
   vpn => 10.0.9.151
   atun => 10.0.9.138
+
+=head1 SEE ALSO
+
+The blog L<entry|http://blogs.perl.org/users/salvador_fandino/2014/02/finding-my-computer.html>.
 
 =head1 COPYRIGHT AND LICENSE
 
