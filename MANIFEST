@@ -10,3 +10,4 @@ sample/parallel_passwd.pl
 sample/sample.pl
 sample/reboot.pl
 sample/dynamic.pl
+sample/find-my-computers.pl
