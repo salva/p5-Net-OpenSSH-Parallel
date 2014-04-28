@@ -1,3 +1,4 @@
+
 package Net::OpenSSH::Parallel;
 
 our $VERSION = '0.13';
@@ -324,7 +325,7 @@ sub _at_error {
 
     if ($on_error == OSSH_ON_ERROR_IGNORE) {
 	if ($error == OSSH_MASTER_FAILED) {
-	    # stablishing a new connection failed, what we should do?
+	    # establishing a new connection failed, what we should do?
 	    # currently we remove the current task from the queue and
 	    # continue.
 	    shift @$queue unless $task;
@@ -466,7 +467,7 @@ sub _at_ready {
     if (my $max_workers = $self->{max_workers}) {
 	my $in_state = $self->{in_state};
 	my $num_workers = $self->_num_workers;
-	$debug and _debug(workers => "num workers: $num_workers, maximun: $max_workers");
+	$debug and _debug(workers => "num workers: $num_workers, maximum: $max_workers");
 	if ($num_workers > $max_workers) {
 	    $debug and _debug(workers => "[$label] suspending");
 	    $self->_set_host_state($label, 'suspended');
@@ -895,7 +896,7 @@ everything!
 
 =back
 
-=head2 Labelling hosts
+=head2 Labeling hosts
 
 Every host is identified by an unique label that is given when the
 host is registered into the parallel scheduler. Usually, the host
@@ -906,7 +907,7 @@ The rationale behind using labels is that a hostname does not
 necessarily identify unique "remote processors" (for instance,
 sometimes your logical "remote processors" may be user accounts
 distributed over a set of hosts: C<foo1@bar1>, C<foo2@bar1>,
-C<foo3@bar2>, ...; a set of hosts that are accesible behind an unique
+C<foo3@bar2>, ...; a set of hosts that are accessible behind an unique
 IP, listening in different ports; etc.)
 
 =head2 Selecting hosts
@@ -930,7 +931,7 @@ Other possible selectors are:
   '*doz*'               # everything containing 'doz'
 
 I<Note: I am still considering how the selector mini-language should
-be, don't hesitate to send your suggestions!>
+be, do not hesitate to send your suggestions!>
 
 =head2 Local resource usage
 
@@ -944,9 +945,9 @@ command) that results in around 5MB of RAM usage per host.
 CPU usage varies greatly depending on the tasks carried out. The most
 expensive are short remote tasks (because of the local process
 creation and destruction overhead) and tasks that transfer big
-ammounts of data through SSH (because of the encryption going on).
+amounts of data through SSH (because of the encryption going on).
 
-In practice, CPU usage doesn't matter too much (mostly because the OS
+In practice, CPU usage does not matter too much (mostly because the OS
 would be able to manage it but also because there is not too many
 things we can do to reduce it) and usually it is RAM about what we
 should be more concerned.
@@ -957,7 +958,7 @@ The module accepts two parameters to limit resource usage:
 
 =item * C<workers>
 
-is the maximun number of remote commands that can be running
+is the maximum number of remote commands that can be running
 concurrently.
 
 =item * C<connections>
@@ -972,8 +973,8 @@ limits RAM usage and limiting the the maximum number of workers
 indirectly limits CPU usage.
 
 The module requires the maximum number of connections to be at least
-equal or bigger than the maximun number of workers, and it is
-recomended that C<maximum_connections E<gt>= 2 * maximum_workers>
+equal or bigger than the maximum number of workers, and it is
+recommended that C<maximum_connections E<gt>= 2 * maximum_workers>
 (otherwise the scheduler will not be able to reuse connections
 efficiently).
 
@@ -1068,10 +1069,10 @@ constants and the corresponding policy will be applied.
 
 =head3 Retrying connection errors
 
-If the module fails when trying to stablish a new SSH connection or
+If the module fails when trying to establish a new SSH connection or
 when an existing connection dies unexpectedly, the option
 C<reconnections> can be used to instruct the module to retry the
-connection until it succeds or the given maximun is reached.
+connection until it succeeds or the given maximum is reached.
 
 C<reconnections> is accepted by both the L</new> and L</add_host>
 methods.
@@ -1104,7 +1105,7 @@ parallel (see L</Local resource usage>).
 
 =item connections => $maximum_connections
 
-sets the maximum number of SSH connections that can be stablished
+sets the maximum number of SSH connections that can be established
 simultaneously (see L</Local resource usage>).
 
 $maximum_connections must be equal or bigger than $maximum_workers
@@ -1112,8 +1113,8 @@ $maximum_connections must be equal or bigger than $maximum_workers
 =item reconnections => $maximum_reconnections
 
 when connecting to some host fails, this argument tells the module the
-maximum number of additional connection atemps that it should perform
-before giving up. The default value is zero.
+maximum number of additional connection attempts that it should
+perform before giving up. The default value is zero.
 
 See also L</Retrying connection errors>.
 
@@ -1131,7 +1132,7 @@ X<add_host>registers a new host into the C<$pssh> object.
 
 C<$label> is the name used to refer to the registered host afterwards.
 
-When the hostname argument is ommited, the label is used also as the
+When the hostname argument is omitted, the label is used also as the
 hostname.
 
 The accepted options are:
@@ -1178,7 +1179,7 @@ Example:
 
 =item scp_put => @local, $remote
 
-These methods queue an SCP remote file copy operation in the selected
+These methods queue a C<scp> remote file copy operation in the selected
 hosts.
 
 =item rsync_get => @remote, $local
@@ -1273,7 +1274,7 @@ One common usage is to synchronize all servers at some point:
   $ssh->push('*', join => '*');
 
 By default, errors are propagated at joins. For instance, in the
-example above, if the scp_get operation queued on server_B failed, it
+example above, if the C<scp_get> operation queued on server_B failed, it
 would abort any further operation queued on server_B and any further
 operation queued after the join in server_A. See also L</Error
 handling>.
@@ -1288,7 +1289,7 @@ operations.
 Jumps forward until the given C<here> tag is reached.
 
 Joins to other hosts queues will be ignored, and joins from other
-queues to this one will be succesfully fulfilled. For instance:
+queues to this one will be successfully fulfilled. For instance:
 
   $pssh->add_host(A => ...);
   $pssh->add_host(B => ...);
@@ -1300,7 +1301,7 @@ queues to this one will be succesfully fulfilled. For instance:
   $pssh->push('*', here => 'there');
   $pssh->push('*', cmd  => 'echo "bye bye from %HOST%");
 
-Note that it is not possible to jump backguards.
+Note that it is not possible to jump backwards.
 
 There is an special target C<END> that can be used to jump to the end
 of the queue.
@@ -1329,8 +1330,8 @@ See L</Error handling>.
 =item or_goto => $tag
 
 Supported for C<command>, C<scp_get>, C<scp_put>, C<rsync_get> and
-C<rsync_put>, when the command, scp or rsync operation fails a goto to
-the given target is performed.
+C<rsync_put>, when the command, C<scp> or C<rsync> operation fails a
+C<goto> to the given target is performed.
 
 For instance:
 
@@ -1435,7 +1436,7 @@ allow running more than one process per remote server concurrently
 
 =item * delay before reconnect
 
-when connecting fails, do not try to reconnect inmediately but after
+when connecting fails, do not try to reconnect immediately but after
 some predefined period
 
 =item * rationalize debugging
@@ -1468,17 +1469,17 @@ sfandino@yahoo.com), please.
 Feedback and comments are also welcome!
 
 The 'sub' and 'parsub' features should be considered experimental and
-its API or behaviour could be changed in future versions of the
+its API or behavior could be changed in future versions of the
 module.
 
 =head2 Reporting bugs
 
 In order to report a bug, write a minimal program that triggers
-it and place the following line at the beggining:
+it and place the following line at the beginning:
 
   $Net::OpenSSH::Parallel::debug = -1;
 
-Then, send me (via rt or email) the debugging output you get when you
+Then, send me (via RT or email) the debugging output you get when you
 run it. Include also the source code of the script, a description of
 what is going wrong and the details of your OS and the versions of
 Perl, C<Net::OpenSSH> and C<Net::OpenSSH::Parallel> you are using.
@@ -1497,8 +1498,8 @@ requirements and we will get back to you ASAP.
 
 =head2 My wishlist
 
-If you like this module and you're feeling generous, take a look at my
-Amazon Wish List: L<http://amzn.com/w/1WU1P6IR5QZ42>
+If you like this module and you are feeling generous, take a look at
+my Amazon Wish List: L<http://amzn.com/w/1WU1P6IR5QZ42>
 
 Also consider contributing to the OpenSSH project this module builds
 upon: L<http://www.openssh.org/donations.html>.
@@ -1514,7 +1515,7 @@ simpler to use but rather more limited.
 L<GRID::Machine> allows to run perl code distributed in a cluster via
 SSH.
 
-If your application requires orchestating workflows more complex than
+If your application requires orchestrating work-flows more complex than
 those supported by L<Net::OpenSSH::Parallel>, you should probably
 consider some L<POE> or L<AnyEvent> based solution (check
 L<POE::Component::OpenSSH>).
