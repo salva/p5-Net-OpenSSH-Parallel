@@ -1,7 +1,8 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
 0.13
-      - Fix lots of spelling errors
+      - add git repository as metadata (patch by David Steinbrunner)
+      - fix lots of spelling errors
       - depend on latest Net::OpenSSH 0.60. 'batch_mode' was being
         used but not available from the version of Net::OpenSSH that
         was being requested (bug report by Alexey Baikov)
