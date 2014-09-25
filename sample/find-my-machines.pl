@@ -8,6 +8,7 @@ use Net::OpenSSH::Parallel;
 use Socket;
 
 my $net = shift // die "network missing\n";
+my $passwd = shift;
 
 my ($ip, $mask) = $net =~ m|^([^/]+)(?:/(\d+))?$|
     or die "bad network specification\n";
@@ -28,6 +29,7 @@ for my $i (0..$imask) {
     my $host = inet_ntoa(pack(N => $iaddr | $i));
     # warn "trying host: $host\n";
     $pssh->add_host($host,
+                    password => $passwd,
                     master_stderr_discard => 1,
                     timeout => 20,
                     master_opts => ['-oStrictHostKeyChecking=no',
