@@ -1,7 +1,7 @@
 
 package Net::OpenSSH::Parallel;
 
-our $VERSION = '0.13';
+our $VERSION = '0.14';
 
 use strict;
 use warnings;
@@ -1540,7 +1540,7 @@ parallel.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright E<copy> 2009-2012 by Salvador FandiE<ntilde>o
+Copyright E<copy> 2009-2012, 2015 by Salvador FandiE<ntilde>o
 (sfandino@yahoo.com).
 
 This library is free software; you can redistribute it and/or modify
