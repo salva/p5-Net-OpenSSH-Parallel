@@ -12,3 +12,4 @@ sample/reboot.pl
 sample/dynamic.pl
 sample/find-my-computers.pl
 sample/filter_output.pl
+sample/concheck.pl

@@ -1451,7 +1451,7 @@ some predefined period
 
 currently it is a mess
 
-=item * add loggin support
+=item * add logging support
 
 log the operations performed in a given file
 
