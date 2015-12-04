@@ -6,6 +6,7 @@ our $VERSION = '0.13';
 use strict;
 use warnings;
 use Carp qw(croak carp);
+our @CARP_NOT=qw(Net::OpenSSH);
 
 use Net::OpenSSH;
 use Net::OpenSSH::Parallel::Constants qw(:error :on_error);
@@ -184,7 +185,7 @@ sub push {
     my $alias = $push_action_alias{$action};
     $action = $alias if defined $alias;
 
-    $action =~ /^(?:command|(?:(?:rsync|scp)_(?:get|put))|join|sub|parsub|here|stop|goto|_notify)$/
+    $action =~ /^(?:command|(?:(?:rsync|scp)_(?:get|put))|join|sub|parsub|here|stop|goto|_notify|connect)$/
 	or croak "bad action '$action'";
 
     my %opts = (($action ne 'sub' and ref $_[0] eq 'HASH') ? %{shift()} : ());
@@ -549,6 +550,8 @@ sub _at_ready {
                     return;
                 }
             }
+
+            next if $action eq 'connect';
 
             $host->{current_task} = [$action, @$task];
             my %opts = %{shift @$task};
@@ -1314,6 +1317,11 @@ successfully fulfilled.
 It is equivalent to
 
   $pssh->push('*', goto => 'END');
+
+=item connect
+
+Just ensures that connecting to the remote machine is possible without
+doing any other action.
 
 =back
 
