@@ -25,7 +25,7 @@ my @hosts = @ARGV;
 if (defined $file) {
     open my $fh, '<', $file or die "unable to open $file: $!";
     while (<$fh>) {
-        next if /^\s*(?:#.*)$/;
+        next if /^\s*(?:#.*)?$/;
         chomp;
         push @hosts, $_;
     }
