@@ -13,3 +13,4 @@ sample/dynamic.pl
 sample/find-my-machines.pl
 sample/filter_output.pl
 sample/concheck.pl
+sample/check-hosts.pl
