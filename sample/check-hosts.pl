@@ -3,19 +3,46 @@
 use strict;
 use warnings;
 
+use Getopt::Long;
 use Net::OpenSSH::Parallel;
 
-my $p = Net::OpenSSH::Parallel->new(reconnections => 2);
+my $retries = 2;
+my $timeout = 10;
+my $verbose;
+my $cmd;
 
+GetOptions("retries|r=i" => \$retries,
+           "timeout|t=i" => \$timeout,
+           "verbose|v"   => \$verbose,
+	   "cmd|c"       => \$cmd);
+
+my @hosts;
 while(<>) {
     chomp;
     next if /^\s*(#.*)?$/;
-    $p->add_host($_)
+    push @hosts, $_
 }
 
-$p->push('*', cmd => "echo", '%HOST% is alive');
-
+my $p = Net::OpenSSH::Parallel->new(reconnections => 2);
+$p->add_host($_,
+	     reconnections => $retries,
+	     master_stderr_discard => 1,
+	     master_opts => ["-oConnectTimeout=$timeout"]) for @hosts;
+$p->push('*', 'connect');
+$p->push('cmd', $cmd) if defined $cmd;
 $p->run;
+
+for (@hosts) {
+    my ($user, $passwd, $host) = /^\s*(?:([^:]+)(?::(.*))?\@)?(.*?)\s*$/;
+    my $target = (length $user ? "$user\@$host" : $host);
+    my $error = $p->get_error($_);
+    if ($error) {
+        print "$target: KO\n" if $verbose
+    }
+    else {
+	print "$target: OK\n"
+    }
+}
 
 
 __END__
@@ -26,7 +53,7 @@ check-hosts.pl
 
 =head1 SYNOPSIS
 
-  check-hosts.pl path/to/file_with_host_list
+  check-hosts.pl [-r retries] [-t timeout] [-c cmd] [-v] path/to/file_with_host_list
 
 =head1 DESCRIPTION
 
@@ -38,9 +65,26 @@ The entries in the list of hosts must have one of the following formats:
     user@host_or_ip
     user:password@host_or_ip
 
-In order to ensure that the remote ssh connection is working, an
-C<echo> command is issued there. That may not work when the remote
-shell is something not reseambling a UNIX shell.
+The following optional arguments are accepted:
+
+=over
+
+=item -v
+
+Verbose mode. When enable prints also the non-reachable hosts
+
+
+=item -r, --retries=N
+
+Reconnection retries
+
+=item -t, --timeout=SECONDS
+
+Connection timeout in seconds
+
+=item -c, --cmd=REMOTE_COMMAND
+
+Optional command to be run on the remote hosts.
 
 =head1 COPYRIGHT AND LICENSE
 
