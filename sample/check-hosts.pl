@@ -23,7 +23,7 @@ while(<>) {
     push @hosts, $_
 }
 
-my $p = Net::OpenSSH::Parallel->new(reconnections => 2);
+my $p = Net::OpenSSH::Parallel->new;
 $p->add_host($_,
 	     reconnections => $retries,
 	     master_stderr_discard => 1,
