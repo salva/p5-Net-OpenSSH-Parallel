@@ -14,7 +14,7 @@ my $cmd;
 GetOptions("retries|r=i" => \$retries,
            "timeout|t=i" => \$timeout,
            "verbose|v"   => \$verbose,
-	   "cmd|c"       => \$cmd);
+	   "cmd|c=s"     => \$cmd);
 
 my @hosts;
 while(<>) {
@@ -29,7 +29,7 @@ $p->add_host($_,
 	     master_stderr_discard => 1,
 	     master_opts => ["-oConnectTimeout=$timeout"]) for @hosts;
 $p->push('*', 'connect');
-$p->push('cmd', $cmd) if defined $cmd;
+$p->push('*', 'cmd', $cmd) if defined $cmd;
 $p->run;
 
 for (@hosts) {
