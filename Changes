@@ -1,5 +1,8 @@
 Revision history for Perl extension Net::OpenSSH::Parallel.
 
+0.15
+      - Add check-hosts.pl example
+
 0.14  Dec 4, 2015
       - add support for "connect" action
       - add git repository as metadata (patch by David Steinbrunner)
