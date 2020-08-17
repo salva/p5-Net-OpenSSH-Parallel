@@ -86,6 +86,8 @@ Connection timeout in seconds
 
 Optional command to be run on the remote hosts.
 
+=back
+
 =head1 COPYRIGHT AND LICENSE
 
 Copyright (C) 2020 by Salvador FandiE<ntilde>o
