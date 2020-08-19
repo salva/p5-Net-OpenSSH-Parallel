@@ -12,11 +12,13 @@ my $key_check;
 my $verbose;
 my $cmd;
 my $debug;
+my $filter;
 
 GetOptions("retries|r=i" => \$retries,
            "timeout|t=i" => \$timeout,
            "verbose|v"   => \$verbose,
 	   "debug|d"     => \$debug,
+	   "filter|f"    => \$filter,
 	   "key-check|k" => \$key_check,
 	   "cmd|c=s"     => \$cmd);
 
@@ -61,7 +63,12 @@ for (@labels) {
         print STDERR "$name{$_}: KO\n" if $verbose
     }
     else {
-	print "$name{$_}: OK\n"
+	if ($filter) {
+	    print "$host{$_}\n"
+	}
+	else {
+	    print "$name{$_}: OK\n"
+	}
     }
 }
 
@@ -114,6 +121,11 @@ doesn't make sense if you are just checking the remote hosts are all
 up).
 
 This flag reactivates it.
+
+=item -f, --filter
+
+Changes the output format so that it becomes identical to the input
+but with the non reachable hosts removed.
 
 =back
 
