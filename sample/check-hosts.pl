@@ -99,7 +99,11 @@ Optional command to be run on the remote hosts.
 
 =item -k, --key-check
 
-By default the script skips the remote host keys. This flag reactivates it.
+By default the script skips the remote host key checking (as it
+doesn't make sense if you are just checking the remote hosts are all
+up).
+
+This flag reactivates it.
 
 =back
 
