@@ -22,9 +22,7 @@ GetOptions("retries|r=i" => \$retries,
 	   "key-check|k" => \$key_check,
 	   "cmd|c=s"     => \$cmd);
 
-if ($debug) {
-    $Net::OpenSSH::Parallel::debug = -1;
-}
+$Net::OpenSSH::Parallel::debug = -1 if $debug;
 
 my @labels;
 my %host;
@@ -46,6 +44,10 @@ while(<>) {
 my @master_opts = "-oConnectTimeout=$timeout";
 push @master_opts, "-oUserKnownHostsFile=/dev/null", "-oStrictHostKeyChecking=no" unless $key_check;
 
+my %cmd_opts;
+$cmd_opts{stdout_discard} = 1 if $filter;
+$cmd_opts{stderr_discard} = 1 if $filter;
+
 my $p = Net::OpenSSH::Parallel->new;
 $p->add_host($_,
 	     host => $host{$_},
@@ -53,7 +55,7 @@ $p->add_host($_,
 	     master_stderr_discard => 1,
 	     master_opts => \@master_opts) for @labels;
 $p->push('*', 'connect');
-$p->push('*', 'cmd', $cmd) if defined $cmd;
+$p->push('*', 'cmd', \%cmd_opts, $cmd) if defined $cmd;
 $p->run;
 
 for (@labels) {
