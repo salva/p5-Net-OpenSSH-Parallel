@@ -8,13 +8,21 @@ use Net::OpenSSH::Parallel;
 
 my $retries = 2;
 my $timeout = 10;
+my $key_check;
 my $verbose;
 my $cmd;
+my $debug;
 
 GetOptions("retries|r=i" => \$retries,
            "timeout|t=i" => \$timeout,
            "verbose|v"   => \$verbose,
+	   "debug|d"     => \$debug,
+	   "key-check|k" => \$key_check,
 	   "cmd|c=s"     => \$cmd);
+
+if ($debug) {
+    $Net::OpenSSH::Parallel::debug = -1;
+}
 
 my @hosts;
 while(<>) {
@@ -23,11 +31,14 @@ while(<>) {
     push @hosts, $_
 }
 
+my @master_opts = "-oConnectTimeout=$timeout";
+push @master_opts, "-oUserKnownHostsFile=/dev/null", "-oStrictHostKeyChecking=no" unless $key_check;
+
 my $p = Net::OpenSSH::Parallel->new;
 $p->add_host($_,
 	     reconnections => $retries,
 	     master_stderr_discard => 1,
-	     master_opts => ["-oConnectTimeout=$timeout"]) for @hosts;
+	     master_opts => \@master_opts) for @hosts;
 $p->push('*', 'connect');
 $p->push('*', 'cmd', $cmd) if defined $cmd;
 $p->run;
@@ -85,6 +96,10 @@ Connection timeout in seconds
 =item -c, --cmd=REMOTE_COMMAND
 
 Optional command to be run on the remote hosts.
+
+=item -k, --key-check
+
+By default the script skips the remote host keys. This flag reactivates it.
 
 =back
 
