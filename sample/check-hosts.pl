@@ -26,12 +26,17 @@ if ($debug) {
 
 my @labels;
 my %host;
+my %name;
+my $ix = 1;
 while(<>) {
     chomp;
     next if /^\s*(#.*)?$/;
     my ($user, $passwd, $host) = /^\s*(?:([^:]+)(?::(.*))?\@)?(.*?)\s*$/;
-    my $label = (length $user ? "$user\@$host" : $host);
+    my $name = (length $user ? "$user\@$host" : $host);
+    my $label = "${name}_$ix";
+    $label =~ s/[^\w\@]/_/g;
     $host{$label} = $_;
+    $name{$label} = $name;
     push @labels, $label;
 }
 
@@ -52,10 +57,10 @@ for (@labels) {
     my ($user, $passwd, $host) = /^\s*(?:([^:]+)(?::(.*))?\@)?(.*?)\s*$/;
     my $error = $p->get_error($_);
     if ($error) {
-        print STDERR "$_: KO\n" if $verbose
+        print STDERR "$name{$_}: KO\n" if $verbose
     }
     else {
-	print "$_: OK\n"
+	print "$name{$_}: OK\n"
     }
 }
 
