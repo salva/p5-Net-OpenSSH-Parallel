@@ -34,6 +34,7 @@ while(<>) {
     my ($user, $passwd, $host) = /^\s*(?:([^:]+)(?::(.*))?\@)?(.*?)\s*$/;
     my $name = (length $user ? "$user\@$host" : $host);
     my $label = "${name}_$ix";
+    $ix++;
     $label =~ s/[^\w\@]/_/g;
     $host{$label} = $_;
     $name{$label} = $name;
