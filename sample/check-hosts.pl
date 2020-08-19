@@ -24,11 +24,15 @@ if ($debug) {
     $Net::OpenSSH::Parallel::debug = -1;
 }
 
-my @hosts;
+my @labels;
+my %host;
 while(<>) {
     chomp;
     next if /^\s*(#.*)?$/;
-    push @hosts, $_
+    my ($user, $passwd, $host) = /^\s*(?:([^:]+)(?::(.*))?\@)?(.*?)\s*$/;
+    my $label = (length $user ? "$user\@$host" : $host);
+    $host{$label} = $_;
+    push @labels, $label;
 }
 
 my @master_opts = "-oConnectTimeout=$timeout";
@@ -36,22 +40,22 @@ push @master_opts, "-oUserKnownHostsFile=/dev/null", "-oStrictHostKeyChecking=no
 
 my $p = Net::OpenSSH::Parallel->new;
 $p->add_host($_,
+	     host => $host{$_},
 	     reconnections => $retries,
 	     master_stderr_discard => 1,
-	     master_opts => \@master_opts) for @hosts;
+	     master_opts => \@master_opts) for @labels;
 $p->push('*', 'connect');
 $p->push('*', 'cmd', $cmd) if defined $cmd;
 $p->run;
 
-for (@hosts) {
+for (@labels) {
     my ($user, $passwd, $host) = /^\s*(?:([^:]+)(?::(.*))?\@)?(.*?)\s*$/;
-    my $target = (length $user ? "$user\@$host" : $host);
     my $error = $p->get_error($_);
     if ($error) {
-        print "$target: KO\n" if $verbose
+        print STDERR "$_: KO\n" if $verbose
     }
     else {
-	print "$target: OK\n"
+	print "$_: OK\n"
     }
 }
 
