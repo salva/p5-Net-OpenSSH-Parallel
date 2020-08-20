@@ -8,21 +8,27 @@ use Net::OpenSSH::Parallel;
 
 my $retries = 2;
 my $timeout = 10;
+my $workers = 20;
 my $key_check;
 my $verbose;
 my $cmd;
-my $debug;
+my $debug = 0;
 my $filter;
+
+my $log_fn = "/tmp/check-host-";
 
 GetOptions("retries|r=i" => \$retries,
            "timeout|t=i" => \$timeout,
+	   "workers|w=i" => \$workers,
            "verbose|v"   => \$verbose,
-	   "debug|d"     => \$debug,
+	   "debug|d=i"   => \$debug,
 	   "filter|f"    => \$filter,
 	   "key-check|k" => \$key_check,
 	   "cmd|c=s"     => \$cmd);
 
-$Net::OpenSSH::Parallel::debug = -1 if $debug;
+$debug = 1 if $verbose and $debug == 0;
+
+$Net::OpenSSH::Parallel::debug = -1 if $debug >= 3;
 
 my @labels;
 my %host;
@@ -41,35 +47,54 @@ while(<>) {
     push @labels, $label;
 }
 
-my @master_opts = "-oConnectTimeout=$timeout";
+my @master_opts = ("-oConnectTimeout=$timeout");
 push @master_opts, "-oUserKnownHostsFile=/dev/null", "-oStrictHostKeyChecking=no" unless $key_check;
+push @master_opts, "-vv" if $debug;
 
 my %cmd_opts;
 $cmd_opts{stdout_discard} = 1 if $filter;
 $cmd_opts{stderr_discard} = 1 if $filter;
 
-my $p = Net::OpenSSH::Parallel->new;
-$p->add_host($_,
-	     host => $host{$_},
-	     reconnections => $retries,
-	     master_stderr_discard => 1,
-	     master_opts => \@master_opts) for @labels;
+my $p = Net::OpenSSH::Parallel->new(connections => $workers + 1,
+				    workers => $workers);
+
+for my $label (@labels) {
+    my %opts = ( host => $host{$label},
+		 reconnections => $retries,
+		 master_opts => \@master_opts );
+
+    if ($debug >= 2) {
+	open my $log, ">", "$log_fn$label";
+	$opts{master_stderr_fh} = $log
+    }
+    else {
+	$opts{master_stderr_discard} = 1
+    }
+    $p->add_host($label, %opts)
+}
+
 $p->push('*', 'connect');
 $p->push('*', 'cmd', \%cmd_opts, $cmd) if defined $cmd;
 $p->run;
 
-for (@labels) {
-    my ($user, $passwd, $host) = /^\s*(?:([^:]+)(?::(.*))?\@)?(.*?)\s*$/;
-    my $error = $p->get_error($_);
+for my $label (@labels) {
+    my $error = $p->get_error($label);
     if ($error) {
-        print STDERR "$name{$_}: KO\n" if $verbose
+	if ($debug) {
+	    if ($debug == 1) {
+		print STDERR "$name{$label}: KO\n"
+	    }
+	    else {
+		print STDERR "$name{$label}: KO (see $log_fn$label)\n"
+	    }
+	}
     }
     else {
 	if ($filter) {
-	    print "$host{$_}\n"
+	    print "$host{$label}\n"
 	}
 	else {
-	    print "$name{$_}: OK\n"
+	    print "$name{$label}: OK\n"
 	}
     }
 }
@@ -83,7 +108,7 @@ check-hosts.pl
 
 =head1 SYNOPSIS
 
-  check-hosts.pl [-r retries] [-t timeout] [-c cmd] [-v] path/to/file_with_host_list
+  check-hosts.pl [-r retries] [-t timeout] [-w workers] [-c cmd] [-v] [-f] [-k] path/to/file_with_host_list
 
 =head1 DESCRIPTION
 
@@ -128,6 +153,10 @@ This flag reactivates it.
 
 Changes the output format so that it becomes identical to the input
 but with the non reachable hosts removed.
+
+=item -w, --workers=N
+
+Maximum number of parallel connections (or ssh workers).
 
 =back
 
